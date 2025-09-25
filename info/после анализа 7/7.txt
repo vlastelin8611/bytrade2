@@ -1,0 +1,354 @@
+В приложенном логе видно, что поток торговли стартует, обновляет тикеры и обращается к API, но затем вылетает на двух ключевых ошибках, из‑за чего сделки так и не открываются. Разберём их по порядку и предложим решения.
+1. Неправильный вызов AdaptiveMLStrategy.analyze_market
+
+В логе присутствует строка:
+2025-09-23 14:09:15,054 - __main__ - ERROR - Ошибка ML анализа для SSVUSDT: AdaptiveMLStrategy.analyze_market() takes 2 positional arguments but 3 were given
+Метод AdaptiveMLStrategy.analyze_market() определён так:
+def analyze_market(self, market_data: Dict) -> Dict[str, Any]:
+    # ...
+Он принимает один словарь (market_data), в котором ожидаются ключи symbol, klines и current_price
+GitHub
+. В TradingWorker его вызывают ошибочно:
+analysis = self.ml_strategy.analyze_market(symbol, klines)  # передаётся два аргумента
+Это и вызывает исключение. Исправьте вызов так, чтобы передавался словарь:
+# Перед анализом формируем словарь данных
+market_data = {
+    'symbol': symbol,
+    'klines': klines,
+    'current_price': float(klines[-1]['close'])  # последняя цена закрытия
+}
+
+try:
+    analysis = self.ml_strategy.analyze_market(market_data)
+except Exception as ml_error:
+    self.logger.error(f"Ошибка ML анализа для {symbol}: {ml_error}")
+    return None
+После этой правки метод получит нужную структуру и сможет извлекать признаки.
+2. Некорректное получение баланса
+
+В логе есть предупреждение:
+api.bybit_client - WARNING - Получен пустой или некорректный ответ при запросе баланса
+api.bybit_client - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+Это значит, что из API возвращается пустой словарь. Возможные причины:
+
+На тестовой площадке (testnet) у вас нет средств, поэтому баланс нулевой.
+
+Ключи API либо неправильно настроены, либо ограничены правами.
+
+Код по‑прежнему пытается брать баланс из неверного места.
+
+Убедитесь, что вы реализовали предложенную ранее логику получения баланса:
+balance_resp = self.bybit_client.get_wallet_balance()
+if balance_resp and 'result' in balance_resp and balance_resp['result'].get('list'):
+    available_balance = float(balance_resp['result']['list'][0].get('totalAvailableBalance', 0))
+else:
+    self.logger.warning("Не удалось получить баланс, используем 0")
+    available_balance = 0.0
+Если available_balance остаётся 0, торговый цикл не будет создавать сделки, поскольку размер позиции меньше минимального порога.
+
+3. Метод update_balance_from_json отсутствует
+
+В логе Qt выводит:
+QMetaObject::invokeMethod: No such method TradingBotMainWindow::update_balance_from_json(QString)
+Где‑то в коде вызывается метод update_balance_from_json(), которого нет в классе TradingBotMainWindow. Проверьте, нет ли строки вроде:
+QMetaObject.invokeMethod(self.window, "update_balance_from_json", ...)
+Если такой метод вызывался по ошибке, уберите или замените на существующий (update_balance_labels, update_positions и т. п.). В противном случае реализуйте update_balance_from_json в TradingBotMainWindow, если он вам нужен.
+
+4. Использование интервалов для свечей
+
+Лог сообщает об ошибке периода:
+api.bybit_client - ERROR - API ошибка: Invalid period!
+__main__ - WARNING - Символ SSVUSDT: ошибка периода, пробуем альтернативный интервал
+Судя по коду, вы запрашиваете /v5/market/kline для category='spot' с интервалом 1h (который API принимает как '60'). Но для некоторых малых или экзотических пар Bybit может не предоставлять свечи на столь крупном интервале. В таком случае следует использовать меньший таймфрейм (например, 15m или 5m) или обработать отсутствие данных:
+interval = '60'  # 1h
+klines = self.bybit_client.get_klines(category='spot', symbol=symbol, interval=interval, limit=200)
+if not klines or len(klines['list']) < 50:
+    # Попробовать меньший интервал
+    klines = self.bybit_client.get_klines(category='spot', symbol=symbol, interval='15', limit=200)
+    # ... обработка возможных ошибок
+Обращайтесь к Bybit API с интервалом, который точно поддерживается для нужного символа.
+
+5. Загрузка исторических данных по тикерам
+
+Вы упомянули, что в главной программе видны только текущие цены. Это происходит, если TickerDataLoader не передаётся в ML‑стратегию или данные из него не используются. В AdaptiveMLStrategy есть метод prepare_historical_data, который может использовать ticker_loader для загрузки исторических свечей. Убедитесь, что:
+
+В конструктор AdaptiveMLStrategy передаётся ticker_loader:
+self.ticker_loader = TickerDataLoader()  # например
+self.ml_strategy = AdaptiveMLStrategy(
+    name="adaptive_ml",
+    config=ml_config,
+    api_client=self.bybit_client,
+    db_manager=self.db_manager,
+    config_manager=self.config_manager,
+    ticker_loader=self.ticker_loader
+)
+В коде prepare_historical_data обрабатываются ситуации, когда API возвращает пустой список, а ticker_loader может подставить данные из файла tickers_data.json.
+
+Если исторические данные не загружаются даже через ticker_loader, возможно, файл tickers_data.json создан программой просмотра тикеров содержит только текущие цены и не хранит свечи. В таком случае следует получать исторические свечи прямо из Bybit API, как показано выше.
+
+6. Итоговые шаги
+
+Исправьте вызов self.ml_strategy.analyze_market(...), передавая словарь с символом, списком свечей и текущей ценой.
+
+Проверьте корректность получения баланса и наличие средств на тестовом счёте.
+
+Удалите или реализуйте метод update_balance_from_json.
+
+Обработайте ошибку API Invalid period!: выбирайте поддерживаемые интервалы и корректно загружайте исторические данные.
+
+Передайте ticker_loader в ML‑стратегию или получайте свечи прямо через API.
+
+После устранения этих проблем торговая стратегия должна получать аналитику, генерировать сигналы и переходить к исполнению сделок.
+В логах вы получаете ошибки, а сделки не открываются. Основная причина — нарушения в вызовах стратегии и некорректное управление данными. Ниже подробно описаны проблемы и конкретные шаги по исправлению, а также разбор логики работы стратегии.
+
+1. Исправление вызова AdaptiveMLStrategy.analyze_market
+
+В TradingWorker метод анализа рынка вызывается так:
+analysis = self.ml_strategy.analyze_market(symbol, klines)
+Этот вызов передаёт два позиционных аргумента, а в определении метода ожидается один словарь market_data
+GitHub
+. Из-за этого в логе возникает ошибка:
+AdaptiveMLStrategy.analyze_market() takes 2 positional arguments but 3 were given
+Как исправить
+
+Перед вызовом сформируйте словарь с нужными полями и передайте его одним аргументом:
+# Предположим, klines — список свечей (dict с 'open', 'high', 'low', 'close', 'volume')
+market_data = {
+    'symbol': symbol,
+    'klines': klines,
+    'current_price': float(klines[-1]['close'])  # последняя цена закрытия
+}
+
+try:
+    analysis = self.ml_strategy.analyze_market(market_data)
+except Exception as ml_error:
+    self.logger.error(f"Ошибка ML анализа для {symbol}: {ml_error}")
+    return None
+Это устранит ошибку вызова и позволит стратегии корректно работать с входными данными.
+
+2. Проверка получения баланса
+
+В логах видно предупреждение:
+api.bybit_client - WARNING - Получен пустой или некорректный ответ при запросе баланса
+api.bybit_client - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+Это значит, что API возвращает пустой результат. Возможно, на тестовой площадке у вас нет средств или ключи не имеют нужных разрешений. Рекомендуется:
+
+Убедиться, что на выбранном аккаунте (testnet или mainnet) есть средства.
+
+Проверить правильность API‑ключей и прав (нужны чтение баланса и торговые права).
+
+Использовать правильный способ извлечения баланса из ответа API. Вместо balance.get('availableBalance') используйте:
+balance_resp = self.bybit_client.get_wallet_balance()
+if balance_resp and 'result' in balance_resp and balance_resp['result'].get('list'):
+    available_balance = float(balance_resp['result']['list'][0].get('totalAvailableBalance', 0))
+else:
+    self.logger.warning("Не удалось получить баланс, используем 0")
+    available_balance = 0.0
+3. Метода update_balance_from_json нет в интерфейсе
+
+В логе Qt появляется сообщение:
+QMetaObject::invokeMethod: No such method TradingBotMainWindow::update_balance_from_json(QString)
+Это означает, что где‑то вызывается метод update_balance_from_json, которого нет в классе TradingBotMainWindow. Нужно либо удалить этот вызов, либо реализовать метод update_balance_from_json() в главном окне. Если метод не нужен, просто удалите строку, которая его вызывает.
+
+4. Загрузка исторических данных
+
+Вы упомянули, что в основном окне отображаются только текущие цены. В AdaptiveMLStrategy есть метод prepare_historical_data, который может загружать исторические свечи через TickerDataLoader, если вы передадите его в конструктор. Убедитесь, что в TradingWorker создаётся и передаётся загрузчик:
+self.ticker_loader = TickerDataLoader()  # путь к tickers_data.json будет выбран по умолчанию
+self.ml_strategy = AdaptiveMLStrategy(
+    name="adaptive_ml",
+    config=ml_config,
+    api_client=self.bybit_client,
+    db_manager=self.db_manager,
+    config_manager=self.config_manager,
+    ticker_loader=self.ticker_loader   # <— передаём загрузчик
+)
+А потом, перед анализом, получите исторические данные:
+klines = self.ml_strategy.prepare_historical_data(symbol, timeframe='1h', limit=200)
+if not klines:
+    self.logger.warning(f"Не удалось получить свечи для {symbol}")
+    return None
+Если файл tickers_data.json не содержит нужных данных, используйте метод API get_klines() напрямую (как вы делаете сейчас), но обрабатывайте ошибки «Invalid period!» и выбирайте поддерживаемый интервал (например, 15 вместо 60).
+Сейчас в вашем проекте исторические данные используются весьма ограниченно и загружаются синхронно:
+
+В AdaptiveMLStrategy.prepare_historical_data просто проверяется наличие ticker_loader и вызывается load_historical_data_from_ticker_loader; при этом метод ничего не загружает сам — если ticker_loader не установлен, возвращается False
+raw.githubusercontent.com
+. То есть стратегия не получает никаких внешних данных.
+
+В окне просмотра тикеров исторические данные подгружаются через API Bybit обычным requests.get с фиксированным limit (например 200 свечей для 1h/4h, 52–104 свечей для недельных интервалов)
+raw.githubusercontent.com
+. Это блокирующий вызов, ограниченный одной страницей данных — многолетние ряды таким способом не получить.
+
+Метод BybitClient.get_klines также синхронный и по умолчанию запрашивает только 200 свечей, даже если задать limit явно
+raw.githubusercontent.com
+. Никаких циклов, подгружающих дополнительные страницы, нет.
+
+В коде стратегии основная логика — это simple_signal_logic, которая принимает текущие свечи и рассчитывает сигналы по простым правилам (изменение цены 1 h и 24 h, RSI, MACD и т.п.)
+GitHub
+. Машинное обучение включается только после накопления не менее 100 обучающих примеров в ходе реальной торговли; заранее на исторических рядах модели не обучаются.
+
+Из-за этого «нейросеть» не имеет доступа к большому объёму исторических данных и не обучается до старта торговли. В результате стратегия почти всегда работает на простых правилах, а запросы API выполняются синхронно, что может тормозить интерфейс. Чтобы исправить ситуацию, нужно организовать загрузку исторических данных в большем объёме и асинхронно, а затем использовать их для предварительного обучения модели.
+
+Что нужно изменить
+1. Загрузка подробных исторических данных
+
+Сделайте собственный модуль для асинхронной загрузки свечей через API. Например, используя aiohttp и параметр start/end, можно последовательно выгружать десятки тысяч свечей:
+import aiohttp
+import asyncio
+from datetime import datetime, timedelta
+
+class AsyncBybitLoader:
+    BASE_URL = "https://api.bybit.com/v5/market/kline"
+
+    def __init__(self, category="spot"):
+        self.category = category
+
+    async def _fetch_klines(self, session, symbol, interval, limit, start, end):
+        params = {
+            "category": self.category,
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit,
+            "start": start,
+            "end": end,
+        }
+        async with session.get(self.BASE_URL, params=params, timeout=10) as resp:
+            data = await resp.json()
+            return data.get("result", {}).get("list", [])
+
+    async def load_history(self, symbol: str, interval: str, days: int = 365, limit: int = 1000):
+        """
+        Загружает исторические данные за указанное число дней.
+        API Bybit возвращает максимум `limit` свечей за один запрос, поэтому
+        делаем несколько вызовов по временным отрезкам.
+        """
+        interval_minutes = {
+            "1": 1, "3": 3, "5": 5, "15": 15, "30": 30,
+            "60": 60, "240": 240, "D": 1440, "W": 10080
+        }[interval]
+
+        end = int(datetime.now().timestamp() * 1000)
+        delta_ms = interval_minutes * 60 * 1000 * limit
+        tasks = []
+        async with aiohttp.ClientSession() as session:
+            for _ in range(int(days * 1440 / interval_minutes / limit)):
+                start = end - delta_ms
+                tasks.append(self._fetch_klines(session, symbol, interval, limit, start, end))
+                end = start
+            chunks = await asyncio.gather(*tasks)
+        # объединяем и сортируем
+        klines = [k for chunk in chunks for k in chunk]
+        klines.sort(key=lambda x: x[0])
+        return [{
+            'timestamp': k[0] / 1000,
+            'open': float(k[1]),
+            'high': float(k[2]),
+            'low': float(k[3]),
+            'close': float(k[4]),
+            'volume': float(k[5]),
+        } for k in klines]
+Этот класс позволяет асинхронно загружать, например, год данных с минутным или часовым интервалом, не блокируя основной поток.
+
+Вы можете интегрировать его в TradingWorker или в отдельный модуль подготовки данных. Для примера:
+# Запускаем асинхронную загрузку в отдельном потоке
+import threading
+
+def fetch_and_store(symbols):
+    loader = AsyncBybitLoader(category='spot')
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    for symbol in symbols:
+        klines = loop.run_until_complete(loader.load_history(symbol, interval='60', days=180))
+        # сохраните данные в файл или передайте в стратегию
+    loop.close()
+
+threading.Thread(target=fetch_and_store, args=(["BTCUSDT", "ETHUSDT"],)).start()
+2. Интеграция с AdaptiveMLStrategy
+
+После загрузки исторических данных передайте их в стратегию и используйте для предварительного обучения:
+# Пусть klines_dict — словарь {symbol: list_of_klines}
+for symbol, klines in klines_dict.items():
+    # Извлекаем признаки
+    features = []
+    labels = []
+    strategy = self.ml_strategy  # экземпляр AdaptiveMLStrategy
+    for i in range(strategy.feature_window, len(klines)):
+        window = klines[i - strategy.feature_window : i]
+        feat = strategy.extract_features(window)
+        if feat:
+            features.append(feat)
+            # метку можно сформировать по изменению цены: 1 (BUY), -1 (SELL), 0 (HOLD)
+            price_now = klines[i]['close']
+            price_future = klines[i+1]['close'] if i+1 < len(klines) else klines[i]['close']
+            change = (price_future - price_now) / price_now
+            label = 1 if change > 0.002 else -1 if change < -0.002 else 0
+            labels.append(label)
+    if features and labels:
+        strategy.train_model(symbol, features, labels)
+В примере мы создаём метки на основе будущего движения цены; в реальной стратегии вы можете выбрать другой критерий (например, 1 при росте >2 %, −1 при падении >2 %, 0 — нейтрально). Этот цикл запускается один раз при инициализации бота и не блокирует основной поток, если выполняется в отдельном потоке.
+
+3. Асинхронность в GUI
+
+Сейчас функция get_bybit_historical_data в окне просмотра тикеров использует синхронный requests.get
+raw.githubusercontent.com
+. Чтобы UI не подвисал, её можно переписать на asyncio/aiohttp и запускать через asyncio.run_coroutine_threadsafe в фоне. Например:
+import asyncio
+import aiohttp
+
+async def async_get_historical(symbol, interval_info):
+    async with aiohttp.ClientSession() as session:
+        async with session.get("https://api.bybit.com/v5/market/kline",
+                               params={"category": "spot", "symbol": symbol,
+                                       "interval": interval_info["interval"],
+                                       "limit": interval_info["limit"]}) as resp:
+            data = await resp.json()
+            return data
+
+def load_historical_data(self):
+    if not self.selected_ticker:
+        return
+    symbol = self.selected_ticker
+    interval_info = interval_mapping[self.interval_var.get()]
+    loop = asyncio.get_event_loop()
+    task = loop.create_task(async_get_historical(symbol, interval_info))
+    task.add_done_callback(lambda fut: self.process_historical_data_result(
+        {"symbol": symbol, "data": fut.result().get("result", {}).get("list", [])}))
+Это позволит загружать данные в фоне, не тормозя интерфейс.
+
+4. Проверьте настройки лимита и интервала
+
+API Bybit возвращает максимум 1000 свечей за один запрос, но вы можете получить больше данных, перебирая диапазоны по времени, как показано выше. Для минутного интервала (1m) и данных за год потребуется 525 600/1000 ≈ 526 запросов; для часового интервала (1h) и года — 8 760/1000 ≈ 9 запросов. С асинхронным подходом это выполняется быстро.
+
+Вывод
+
+Текущая реализация загружает лишь 200 последних свечей синхронным запросом и не обучает модель на исторических рядах. Чтобы нейросеть (или любая ML‑модель) могла прогнозировать рынок:
+
+Разработайте асинхронный загрузчик, который будет циклически запрашивать API Bybit с параметрами start/end и собирать длинные ряды свечей. Используйте aiohttp и asyncio, чтобы не блокировать интерфейс и позволить параллельную загрузку для нескольких символов.
+
+Храните загруженные данные в удобной структуре (файл, база данных) и передайте их в AdaptiveMLStrategy.
+
+Реализуйте предварительное обучение в AdaptiveMLStrategy: извлекайте признаки из исторических окон и создавайте метки (например, направление цены) для обучения классификатора. Запускайте это в отдельном потоке при инициализации бота, чтобы не мешать запуску интерфейса.
+
+Перепишите синхронные вызовы исторических данных в GUI на асинхронные, чтобы интерфейс не замерзал.
+
+После этих изменений у вас будет полный набор исторических данных, модель сможет обучаться до запуска реальной торговли, а программа не будет тормозить при загрузке больших объёмов данных.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

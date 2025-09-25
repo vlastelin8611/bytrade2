@@ -1,0 +1,203 @@
+Программа для тикеров работает корректно
+Журнал работы ticker_viewer_log_20250922_142605.txt показывает, что утилита для тикеров регулярно получает ~681 спотовых пар через API Bybit и сохраняет их в tickers_data.json. Несколько раз были ошибки тайма‑аута, но данные сохранились и обновились
+GitHub
+. Это подтверждает, что данные для торговли есть, и проблема не в загрузчике тикеров.
+
+Главная ошибка находится в TradingWorker._execute_trade
+В этой функции рассчитывается размер позиции и затем пытается разместиться ордер. Есть несколько критических ошибок:
+
+Неправильный доступ к балансу. Метод BybitClient.get_wallet_balance() возвращает вложенный словарь result['list'][0]['totalAvailableBalance'], но в коде используется balance.get('availableBalance', 0)
+GitHub
+. Из‑за этого available_balance всегда равен 0, и рассчитанный размер позиции (position_size) меньше минимального порога (10 USD), поэтому функция сразу выходит и ордера не отправляются
+GitHub
+.
+
+Не указан обязательный параметр category для заказа. Метод BybitClient.place_order требует обязательный аргумент category (например, "spot" или "linear")
+GitHub
+, но при вызове в TradingWorker передаются только symbol, side, order_type и qty
+GitHub
+. Это приводит к исключению и ордер не создаётся.
+
+Использование атрибутов, которых нет у TradingWorker. В коде проверяется self.balance_limit_active и self.balance_limit_amount
+GitHub
+, однако эти поля определены в классе TradingBotMainWindow (главном окне), а не в рабочем потоке. Аналогично, после размещения сделки выполняется self.trade_history.append(trade_info)
+GitHub
+, но список trade_history существует только в TradingBotMainWindow (инициализируется в конструкторе окна
+GitHub
+). Эти обращения вызывают исключения AttributeError, торговый цикл прерывается, и никакие данные не отображаются в интерфейсе.
+
+Из‑за этих ошибок журналы торгового бота пустые
+В каталоге logs/ находятся файлы trading_bot_*.log, но они имеют размер 0. Причина в том, что поток торговли падает, не успевая записать лог; ошибки обрываются внутри блока try/except и логирование отключено. В то же время журналы тикеров заполняются корректно, что ещё раз подтверждает, что проблема именно в торговой части.
+
+Функция place_order в клиенте Bybit
+Для справки: метод place_order в bybit_client.py принимает параметры category, symbol, side, order_type и qty, формирует словарь и делает POST-запрос к /v5/order/create
+GitHub
+. Если не передать category, сервис Bybit вернёт ошибку.
+
+Итог
+
+Ваши API‑ключи загружаются, данные о тикерах поступают, но автоматическая торговля не работает из‑за ошибок в коде TradingWorker:
+
+балансовая информация читается неправильно, поэтому размер позиции всегда 0;
+
+обязательный параметр category для ордера не передаётся;
+
+используются атрибуты (balance_limit_active, balance_limit_amount, trade_history), которые отсутствуют в классе TradingWorker и принадлежат основному окну.
+
+В результате при нажатии на «Запустить торговлю» поток торговли быстро завершается, не исполнив ни одной сделки, и интерфейс остаётся пустым. Чтобы исправить работу, необходимо изменить код: корректно получать баланс (balance['result']['list'][0]['totalAvailableBalance']), передавать правильную категорию («spot» для спота), и либо передать в TradingWorker ссылку на данные об ограничителе/истории или перенести логику в главный класс. Пока этого не сделать, торговля запускаться не будет.
+
+
+
+
+
+
+конкретные рекомендации:
+Ниже приведены рекомендации, которые помогут устранить ошибки и заставить бота работать. Рекомендации сопровождаются примерами кода.
+1. Правильное получение доступного баланса
+
+Проблема: Метод get_wallet_balance() возвращает словарь с вложенной структурой: баланс хранится внутри result['list'][0]['totalAvailableBalance'], но в TradingWorker._execute_trade используется balance.get('availableBalance'), из‑за чего доступный баланс всегда 0.
+
+Решение: Извлекать баланс из правильного уровня. Вместо:
+balance = self.bybit_client.get_wallet_balance()
+available_balance = float(balance.get('availableBalance', 0))
+сделайте так:
+balance_resp = self.bybit_client.get_wallet_balance()
+# Доступный баланс находится в result['list'][0]['totalAvailableBalance']
+if balance_resp and 'result' in balance_resp and balance_resp['result'].get('list'):
+    available_balance = float(balance_resp['result']['list'][0].get('totalAvailableBalance', 0))
+else:
+    available_balance = 0.0
+Так вы будете получать корректный доступный баланс для расчёта размера позиции.
+2. Передача параметра category в place_order()
+
+Проблема: Метод place_order требует обязательный параметр category, который определяет тип рынка ('spot', 'linear', 'inverse' и т.п.). В коде он не передаётся, поэтому вызов API не работает.
+
+Решение: Передавайте category при размещении ордера. Например, если вы торгуете спот‑рынком, используйте 'spot':
+order_result = self.bybit_client.place_order(
+    category='spot',       # тип рынка: 'spot' для спотовых сделок
+    symbol=symbol,
+    side=side,             # 'Buy' или 'Sell'
+    order_type='Market',   # или 'Limit'
+    qty=str(position_size) # размер позиции как строка
+)
+Если вы торгуете фьючерсами (линейные контракты), укажите category='linear'.
+
+3. Исправление доступа к атрибутам баланс‑лимита
+
+Проблема: В методе _execute_trade обращение к self.balance_limit_active и self.balance_limit_amount, а также к self.trade_history, вызывает ошибку, так как эти переменные объявлены в TradingBotMainWindow, а не в TradingWorker.
+
+Вариант 1 – передача ссылок в конструктор:
+Можно изменить конструктор TradingWorker так, чтобы он принимал ссылки на соответствующие переменные или методы главного окна. Например:
+class TradingWorker(QThread):
+    def __init__(self, api_key, api_secret, main_window, testnet=True):
+        super().__init__()
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.main_window = main_window  # ссылка на главный класс
+        # …
+
+    def _execute_trade(self, symbol, analysis, session_id):
+        # …
+        # Доступ к лимиту из главного окна
+        if self.main_window.balance_limit_active and self.main_window.balance_limit_amount > 0:
+            available_balance = min(available_balance, self.main_window.balance_limit_amount)
+        # …
+        # Добавление сделки в историю через главное окно
+        self.main_window.add_trade_to_history(trade_info)
+Тогда при создании рабочего потока в TradingBotMainWindow вы передаёте self как параметр:
+self.trading_worker = TradingWorker(api_key=self.api_key, api_secret=self.api_secret, main_window=self, testnet=self.testnet)
+Вариант 2 – объявление атрибутов внутри TradingWorker:
+Если вы хотите оставить TradingWorker независимым, можно объявить необходимые атрибуты в нём:
+class TradingWorker(QThread):
+    def __init__(self, api_key, api_secret, testnet=True):
+        super().__init__()
+        # …
+        self.balance_limit_active = False
+        self.balance_limit_amount = 0.0
+        self.trade_history = []
+И затем синхронизировать эти значения через методы главного окна:
+# В главном окне, перед запуском рабочего потока:
+self.trading_worker.balance_limit_active = self.balance_limit_active
+self.trading_worker.balance_limit_amount = self.balance_limit_amount
+self.trading_worker.trade_history = self.trade_history
+4. Обновление истории сделок и UI
+
+Если вы решите хранить историю сделок в TradingWorker, то после размещения ордера нужно обновлять UI через сигналы. Например, определите в TradingWorker сигнал:
+from PySide6.QtCore import Signal
+
+class TradingWorker(QThread):
+    trade_executed = Signal(dict)
+    # …
+    def _execute_trade(self, symbol, analysis, session_id):
+        # …
+        if order_result:
+            trade_info = {…}
+            self.trade_history.append(trade_info)
+            # отправить данные в главное окно
+            self.trade_executed.emit(trade_info)
+А в TradingBotMainWindow подключите этот сигнал к слоту, который добавляет сделку в историю UI:
+def start_trading_worker(self):
+    self.trading_worker = TradingWorker(self.api_key, self.api_secret, testnet=self.testnet)
+    self.trading_worker.trade_executed.connect(self.add_trade_to_history)
+    self.trading_worker.start()
+Тогда после каждой успешной сделки интерфейс будет обновляться автоматически.
+
+5. Отладка и логирование
+
+Пока вы вносите изменения, полезно временно включить подробное логирование. Убедитесь, что logging.basicConfig настроен на вывод в файл и консоль. Например:
+logging.basicConfig(
+    level=logging.DEBUG,  # установите DEBUG для детального вывода
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()
+    ]
+)
+Также можно вручную добавить логирование важных переменных (баланс, размер позиции, параметры ордера), чтобы отслеживать, что именно передаётся в API.
+6. Проверка API‑ключей и тестового режима
+
+Прежде чем запускать торговлю на реальном счёте:
+
+Проверьте, что USE_TESTNET в config.py соответствует выбранному режиму.
+
+Убедитесь, что ключи действительно созданы для нужной сети (testnet или mainnet).
+
+После исправлений запустите бота с небольшими суммами или в тестовой сети.
+Итог
+
+Основные шаги по исправлению:
+
+Извлекайте totalAvailableBalance из вложенной структуры ответа Bybit.
+
+Обязательно передавайте параметр category в place_order.
+
+Сделайте доступ к balance_limit_active, balance_limit_amount и trade_history из TradingWorker корректным (передавая ссылки на эти переменные или объявив их в классе).
+
+После размещения ордера отправляйте событие в UI, чтобы отображалась история сделок.
+
+Включите расширенное логирование для диагностики.
+
+Следуя этим рекомендациям, вы устраните ключевые ошибки, и после запуска торговля должна начать работать.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,272 @@
+
+# Руководство по работе с Bybit API в Postman (Testnet)
+
+Это руководство описывает полный порядок действий для работы с API Bybit V5 на тестовой сети. Оно объясняет, как получить данные о балансе, перевести активы между кошельками FUND и UNIFIED, настроить автоматическое зачисление депозитов и использовать тестовую среду для отладки вашего торгового бота. Все описания основаны на работе в Postman, но принципы подписания запросов и взаимодействия с API пригодятся и для вашей программы на Python.
+
+## 1. Получение API‑ключей
+
+1. Перейдите на сайт **testnet.bybit.com** и войдите в свой аккаунт.  
+2. В меню аккаунта выберите **API Management** и нажмите **Create New Key**.  
+3. Важно выбрать **System‑generated (HMAC) API Key**. Такой ключ поставляется парой `API Key`/`Secret` и подписывается алгоритмом **HMAC‑SHA256**https://raw.githubusercontent.com/vlastelin8611/bytrade/main/info/info%20text.txt#:~:text=Select%20Your%20API%20Key%20Type. Другой тип — **Auto‑generated (RSA)** — требует RSA‑подписи и base64‑кодирования и не подходит для данного руководства.  
+4. Дайте ключу понятное имя, установите разрешения (*Read* и *Trade* — этого достаточно) и сохраните.  
+5. Скопируйте `API Key` и `API Secret` в надёжное место. Эти значения будем использовать в окружении Postman и в своём боте.
+
+## 2. Настройка окружения в Postman
+
+В Postman удобно хранить значения ключей и адресов в «окружениях». Создайте новое окружение (например, `Bybit Testnet Env`) и задайте переменные:
+
+| Переменная        | Значение по умолчанию                           | Назначение |
+|-------------------|-------------------------------------------------|------------|
+| `base_url`        | `https://api-testnet.bybit.com`                 | Базовый URL тестовой сетиhttps://bybit-exchange.github.io/docs/v5/asset/balance/all-balance#:~:text=HTTP%20Request |
+| `api_key`         | *ваш API key*                                   | Ключ для подписи |
+| `api_secret`      | *ваш API secret*                                | Секрет для подписи |
+| `recv_window`     | `5000`                                          | Время жизни запроса (мс) |
+| `accountType`     | `UNIFIED`                                       | Сегмент счёта для балансов (UNIFIED для UTA) |
+| `coin`            | `USDT`                                          | Валюта для фильтра баланса |
+| `fromAccountType` | `FUND`                                          | Откуда переводим (Funding) |
+| `toAccountType`   | `UNIFIED`                                       | Куда переводим |
+| `amount`          | `100`                                           | Сумма перевода (можно менять) |
+| `depositAccountType` | `UNIFIED`                                     | Кошелёк для автоматических депозитов |
+| `transferId`      | *оставьте пустым*                               | ID перевода (будет сгенерирован скриптом) |
+
+Выберите окружение в правом верхнем углу Postman, чтобы все запросы использовали эти переменные.
+
+## 3. Pre‑request Script для подписи запросов
+
+Для приватных эндпоинтов Bybit нужно подписывать запросы. Подпись строится как `timestamp + api_key + recv_window + payload` и подписывается HMAC‑SHA256https://raw.githubusercontent.com/vlastelin8611/bytrade/main/info/info%20text.txt#:~:text=Calculate%20the%20string%20you%20want,You. Пэйлоад — это либо строка параметров (queryString) для GET, либо тело запроса для POST. Ниже приведён полный скрипт, который можно добавить на уровень коллекции (`Pre-request Script`), чтобы он автоматически выполнялся перед каждым запросом:
+
+```javascript
+// === Helpers ===
+function getVar(name, defVal = '') {
+  const env = pm.environment.get(name);
+  if (env !== undefined && env !== null) return String(env);
+  const col = pm.collectionVariables.get(name);
+  if (col !== undefined && col !== null) return String(col);
+  return String(defVal);
+}
+
+// === Core vars ===
+const apiKey    = getVar('api_key').trim();
+const apiSecret = getVar('api_secret').trim();
+let recvWindow  = getVar('recv_window', '5000').trim();
+if (!recvWindow) recvWindow = '5000';
+
+const timestamp = Date.now().toString();
+
+// === Build queryString from actual URL params (variable substitution) ===
+const pairs = [];
+if (pm.request.url && pm.request.url.query) {
+  pm.request.url.query.each(q => {
+    if (q && q.key != null) {
+      const k = pm.variables.replaceIn(String(q.key));
+      const v = pm.variables.replaceIn(String(q.value ?? ''));
+      pairs.push([k, v]);
+    }
+  });
+}
+pairs.sort((a, b) => a[0].localeCompare(b[0]));
+const queryString = pairs.map(([k, v]) => `${k}=${v}`).join('&');
+
+// === Generate transferId (UUID) if not present ===
+function uuidv4() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+if (!pm.environment.get('transferId') || pm.environment.get('transferId') === '') {
+  pm.environment.set('transferId', uuidv4());
+}
+
+// === Prepare body for signature (POST JSON) ===
+let bodyRaw = '';
+if (pm.request.method !== 'GET' && pm.request.body) {
+  if (pm.request.body.mode === 'raw') {
+    bodyRaw = pm.variables.replaceIn(pm.request.body.raw || '');
+    // Записываем обратно, чтобы отправить ровно то, что подписали
+    pm.request.body.update(bodyRaw);
+  } else if (pm.request.body.mode === 'urlencoded') {
+    const bodyPairs = [];
+    pm.request.body.urlencoded.each(el => {
+      if (el && !el.disabled) {
+        const k = pm.variables.replaceIn(String(el.key));
+        const v = pm.variables.replaceIn(String(el.value || ''));
+        bodyPairs.push([k, v]);
+      }
+    });
+    bodyPairs.sort((a, b) => a[0].localeCompare(b[0]));
+    bodyRaw = bodyPairs.map(([k, v]) => `${k}=${v}`).join('&');
+  }
+}
+
+// === Choose payload ===
+const payload = (pm.request.method === 'GET') ? queryString : bodyRaw;
+
+// === Compose sign string and HMAC-SHA256 ===
+const signStr = timestamp + apiKey + recvWindow + payload;
+const signature = CryptoJS.enc.Hex.stringify(
+  CryptoJS.HmacSHA256(signStr, apiSecret)
+);
+
+// === Expose to environment for headers ===
+pm.environment.set('timestamp', timestamp);
+pm.environment.set('signature', signature);
+
+// === Debug (optional) ===
+console.log('SIGN STRING =>', signStr);
+console.log('SIGNATURE  =>', signature);
+```
+
+Скрипт автоматически генерирует `transferId` для переводов, подписывает и подставляет текущий `timestamp` и `signature` в окружение. В headers каждого запроса должны быть строки:
+
+```
+X-BAPI-API-KEY: {{api_key}}
+X-BAPI-TIMESTAMP: {{timestamp}}
+X-BAPI-SIGN: {{signature}}
+X-BAPI-RECV-WINDOW: {{recv_window}}
+```
+
+**Заголовок `X-BAPI-SIGN-TYPE` не нужен** для HMAC‑ключей и может приводить к ошибкам.
+
+## 4. Описание запросов коллекции
+
+Коллекция содержит 6 готовых запросов.
+
+### 4.1. Баланс Funding‑кошелька
+
+**Метод:** `GET /v5/asset/transfer/query-account-coins-balance`
+
+**URL:**
+```
+{{base_url}}/v5/asset/transfer/query-account-coins-balance
+```
+
+**Параметры:**
+
+| Key         | Value    | Комментарий |
+|-------------|----------|-------------|
+| `accountType` | `FUND`   | Обязательный. Тип счёта `FUND` — Funding‑кошелёк. |
+| `coin`        | `USDT`   | Опциональный. Если указать, вернётся только эта монета; можно оставить пустым для всех. |
+
+Этот запрос позволяет увидеть, какие монеты и в каком количестве находятся в Funding‑кошельке. Например, у вас было 2 BTC и 20 000 USDT — запрос вернул эти данные.
+
+### 4.2. Баланс Unified Trading Account (UTA)
+
+**Метод:** `GET /v5/account/wallet-balance`
+
+**URL:**
+```
+{{base_url}}/v5/account/wallet-balance
+```
+
+**Параметры:**
+
+| Key           | Value     | Комментарий |
+|---------------|-----------|-------------|
+| `accountType` | `UNIFIED` | В UTA этот эндпоинт поддерживает только `UNIFIED`https://bybit-exchange.github.io/docs/v5/user/wallet-type#:~:text=%2A%20%60%5B,Funding%20wallet%20is%20never%20operated. |
+| `coin`        | `USDT`    | Фильтр по валюте. |
+
+Запрос возвращает структуру `list[]`, где помимо `walletBalance` и `equity` для каждой монеты содержатся показатели маржи (`totalInitialMargin`, `accountIMRate`, `usdValue` и т.д.). После перевода 100 USDT из FUND, вы увидели `walletBalance: 100` и `usdValue ≈ 100`. Другие сегменты (`SPOT`, `CONTRACT`) для UTA не поддерживаются и вызывают ошибку `retCode 10001`.
+
+### 4.3. Список монет, доступных для перевода
+
+**Метод:** `GET /v5/asset/transfer/query-transfer-coin-list`
+
+**URL:**
+```
+{{base_url}}/v5/asset/transfer/query-transfer-coin-list
+```
+
+**Параметры:**
+| Key              | Value       |
+|------------------|-------------|
+| `fromAccountType` | `FUND`      |
+| `toAccountType`   | `UNIFIED`   |
+
+Сервер возвращает массив тикеров (монеты), которые можно перевести из FUND в UNIFIED. В вашем случае список оказался огромным — от `BTC`, `ETH`, `USDT` до тестовых и фиатных валют. Это подтверждает, что USDT доступна для перевода.
+
+### 4.4. Внутренний перевод из FUND в UNIFIED
+
+**Метод:** `POST /v5/asset/transfer/inter-transfer`
+
+**URL:**
+```
+{{base_url}}/v5/asset/transfer/inter-transfer
+```
+
+**Заголовки:** помимо стандартных подписи — `Content-Type: application/json`.
+
+**Тело запроса (raw JSON):**
+```json
+{
+  "transferId": "{{transferId}}",
+  "coin": "{{coin}}",
+  "amount": "{{amount}}",
+  "fromAccountType": "{{fromAccountType}}",
+  "toAccountType": "{{toAccountType}}"
+}
+```
+
+Здесь `transferId` — уникальный идентификатор перевода; наш скрипт генерирует его автоматически, если пуст. Вы можете задать свои `coin` и `amount` в окружении. После отправки вы получили `status: "SUCCESS"`, а баланс UNIFIED обновился.
+
+### 4.5. Настройка кошелька для депозитов (автозачисление)
+
+**Метод:** `POST /v5/asset/deposit/deposit-to-account`
+
+**URL:**
+```
+{{base_url}}/v5/asset/deposit/deposit-to-account
+```
+
+**Тело запроса:**
+```json
+{"accountType":"{{depositAccountType}}"}
+```
+
+По умолчанию все депозиты на Bybit попадают в FUND. Этот запрос разрешает указать, куда будут зачисляться будущие депозиты. В вашем случае вы передали `UNIFIED`, и сервер вернул `status: 1` — настройка принята. Чтобы подпись совпала, тело должно быть в одну строку и полностью соответствовать тому, что подписывает скрипт.
+
+### 4.6. Публичный запрос цен
+
+**Метод:** `GET /v5/market/tickers`
+
+**URL:**
+```
+{{base_url}}/v5/market/tickers
+```
+
+**Параметры:**
+| Key       | Value     |
+|-----------|-----------|
+| `category`| `spot`    (или `linear`, `inverse` для деривативов) |
+| `symbol`  | `BTCUSDT` |
+
+Поскольку этот эндпоинт публичный, он не требует подписи. В ответе содержатся `bid1Price`, `ask1Price` и `lastPrice`. На тестовой сети цена BTCUSDT может отличаться от реального рынка, но это значение можно использовать для оценки вашего баланса в долларах. Например, `lastPrice: 106000` и `BTC=2` дают 212 000 USDT, плюс 20 000 USDT в кошельке = 232 000 USDT. На testnet котировки иногда сильно расходятся, что объясняет, почему ваша оценка отличалась от «147 000 USD».
+
+## 5. Проверка ключа и окружения
+
+Чтобы убедиться, что ключ и подпись работают, можно выполнить `GET /v5/user/query-api` (не включён в коллекцию). Он не требует параметров и возвращает информацию о ключе. Если получаете `retCode: 0`, ключ валиден и имеет нужные разрешенияhttps://bybit-exchange.github.io/docs/v5/user/apikey-info#:~:text=HTTP%20Request. В вашем случае этот шаг успешно прошёл.
+
+## 6. Работа в своей программе
+
+Чтобы использовать эти запросы в вашей программе (например, на Python), вы должны повторить логику подписания. Основные шаги:
+
+1. **Собрать строку для подписи**: `timestamp + api_key + recv_window + payload`, где `payload` — строка параметров для GET или сырой JSON (или URL‑закодированная строка) для POST.
+2. **Вычислить HMAC‑SHA256** от этой строки, используя `api_secret` в качестве ключа. В Python для этого подходит `hmac.new(secret.encode(), sign_str.encode(), hashlib.sha256).hexdigest()`.
+3. **Отправить HTTP‑запрос** с заголовками `X-BAPI-API-KEY`, `X-BAPI-TIMESTAMP`, `X-BAPI-SIGN` и `X-BAPI-RECV-WINDOW`. В теле запроса указывать точно тот текст, который был подписан.
+4. **Обрабатывать ответы**: код `0` означает успех, другие коды несут описание ошибки (например, `10001` — неподдерживаемый параметр, `10004` — ошибка подписи).
+
+Для получения баланса в UTA в программе нужно: (1) получить баланс FUND, (2) при необходимости выполнить внутренний перевод `FUND→UNIFIED`, (3) запросить баланс `UNIFIED`, (4) преобразовать монеты в доллары, используя публичный тиковый запрос, если нужно. Помните, что Bybit вводит тестовые активы в FUND, а не в UNIFIED; это поведение можно изменить только эндпоинтом `deposit-to-account`https://bybit-exchange.github.io/docs/v5/asset/deposit/set-deposit-acct#:~:text=,Only%20main%20UID%20can%20access.
+
+## 7. Вывод
+
+Мы протестировали шесть запросов на тестовой сети Bybit:
+
+1. Запрос баланса Funding‑кошелька (`query-account-coins-balance`) показывает, что у вас 2 BTC и 19 900 USDT.  
+2. Запрос баланса Unified‑счёта (`wallet-balance`) после перевода 100 USDT показывает `walletBalance: 100`.  
+3. Запрос списка переносимых монет (`query-transfer-coin-list`) возвращает перечень всех монет, доступных для внутреннего перевода (USDT, BTC и многие другие).  
+4. Внутренний перевод (`inter-transfer`) успешно перевёл 100 USDT из FUND в UNIFIED (`status: "SUCCESS"`).  
+5. Настройка автозачисления (`deposit-to-account`) выполнена (`status: 1`); будущие депозиты будут попадать в UNIFIED.  
+6. Публичный запрос цен (`market/tickers`) возвращает цену BTCUSDT на тестнет.  
+
+Эти шаги подтверждают, что работа с балансом в Postman настроена правильно. Описанный pre‑request script и окружение позволяют повторять те же операции в дальнейшем и могут быть легко адаптированы для интеграции в ваш торговый бот.

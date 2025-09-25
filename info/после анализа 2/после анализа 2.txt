@@ -1,0 +1,164 @@
+
+BYBIT SIMPLE VERSION — АУДИТ, ПРИЧИНА МЕНЬШЕ 1 BTC, КАК ПОЛУЧАТЬ ПОЗИЦИИ (V5), ЧТО ИСПРАВИТЬ
+Дата: 2025-09-06 11:29:35ZКРАТКО
+- Баланс подтягивается корректно по UNIFIED, но количество BTC отображается меньше 1 из‑за логики расчёта в UI: берётся не поле `walletBalance` по монете BTC, а либо USD‑эквивалент (`usdValue`), либо агрегат по всем монетам/ошибка разметки таблицы/приведение типов.
+- Для позиций в V5 нужен эндпоинт `/v5/position/list` с `category=linear|inverse|option`, при UNIFIED для USDT‑перпетуалов — `category=linear` (дополнительно можно фильтровать `symbol` и/или `settleCoin=USDT`).
+- В коде simple_version убедитесь, что парсинг списка монет из `/v5/account/wallet-balance` идёт по `result.list[0].coin[]` и что именно оттуда берётся `walletBalance` для BTC без преобразования в USD и без деления.
+- Ниже — конкретные места, как это чинить и как получить позиции. Привожу готовые примеры кода (Python) и точные запросы (для Postman и вашей программы).
+
+ПРИЧИНА «BTC < 1» И КАК ИСПРАВИТЬ
+Вероятные причины (основано на типичных ошибках и вашей симптоматике):
+1) Вместо количества BTC берётся `usdValue` (это уже пересчитанная стоимость в USD) и где‑то потом делится на большую цену, либо выводится само значение.
+2) Парсинг идёт не из `coin[]`, а используется агрегированное поле `totalWalletBalance` / `totalEquity` — это USD‑сумма по всем активам, а не количество BTC.
+3) Значение строковое → приводится к `int` (усечение дробной части) или форматируется через неправильный форматер.
+4) UI заполняет таблицу не тем ключом словаря (например, берёт `equity` вместо `walletBalance`).
+5) Кэш/DB: в кэше/таблице лежит старая строка с `walletBalance=0` и не обновляется при переключении счёта.
+
+Что должно быть:
+- Ответ `/v5/account/wallet-balance?accountType=UNIFIED&coin=BTC,USDT` возвращает массив `coin`. Для строки с `"coin": "BTC"` поле `"walletBalance"` — это и есть фактическое КОЛИЧЕСТВО BTC (строка, приводим к Decimal).
+- Если нужен USD‑эквивалент BTC — берём `"usdValue"` у той же монеты.
+
+Проверочный фрагмент (Python, Decimal во избежание ошибок округления):
+---------------------------------------------------------------------
+from decimal import Decimal
+
+def qty_from_wallet_balance_coin_list(wallet_json, wanted_coin: str):
+    """wallet_json = ответ /v5/account/wallet-balance.
+       Возвращает Decimal-количество монеты wanted_coin."""
+    coins = wallet_json["result"]["list"][0].get("coin", [])
+    for c in coins:
+        if c.get("coin") == wanted_coin:
+            return Decimal(c.get("walletBalance", "0"))
+    return Decimal("0")
+
+# Пример использования:
+# btc_qty = qty_from_wallet_balance_coin_list(resp_json, "BTC")
+# usdt_qty = qty_from_wallet_balance_coin_list(resp_json, "USDT")
+---------------------------------------------------------------------
+
+Если у вас сейчас берётся значение меньше 1, проверьте:
+- в месте, где рисуете «Количество BTC», действительно ли берётся `walletBalance` по монете "BTC" из `result.list[0].coin[]`;
+- нет ли форматирования типа `:.0f` (усечение дроби) или `int(...)`;
+- нет ли деления на 100 / 1_000 по ошибке;
+- не подставляете ли `usdValue` вместо количества.
+
+КАК ПОЛУЧАТЬ ТОРГОВЫЕ ПОЗИЦИИ (V5)
+1) Эндпоинт: GET /v5/position/list
+2) Обязательные/важные параметры:
+   - category: linear (USDT‑перпетуалы на UNIFIED), inverse (инверсные), option (опционы).
+   - symbol: опционально, чтобы получить конкретный инструмент (например, BTCUSDT).
+   - settleCoin: опционально, чтобы ограничить, напр., USDT.
+3) Пример запросов (UNIFIED, перпетуалы USDT):
+   - Все позиции по USDT‑перпетуалам: /v5/position/list?category=linear&settleCoin=USDT
+   - Конкретный символ: /v5/position/list?category=linear&symbol=BTCUSDT
+
+Пример Python (ваш BybitClient):
+---------------------------------
+import time, hmac, hashlib, requests
+from decimal import Decimal
+
+class BybitClient:
+    def __init__(self, api_key: str, api_secret: str, base_url="https://api-testnet.bybit.com", recv_window="5000"):
+        self.api_key = api_key
+        self.api_secret = api_secret.encode()
+        self.base_url = base_url.rstrip('/')
+        self.recv_window = str(recv_window)
+
+    def _headers(self, query_string: str) -> dict:
+        ts = str(int(time.time() * 1000))
+        sign_str = f"{ts}{self.api_key}{self.recv_window}{query_string}"
+        sign = hmac.new(self.api_secret, sign_str.encode(), hashlib.sha256).hexdigest()
+        return {
+            "X-BAPI-API-KEY": self.api_key,
+            "X-BAPI-TIMESTAMP": ts,
+            "X-BAPI-RECV-WINDOW": self.recv_window,
+            "X-BAPI-SIGN": sign,
+            "X-BAPI-SIGN-TYPE": "2",
+        }
+
+    def get_wallet_balance(self, account_type="UNIFIED", coins=None):
+        # coins: список тикеров через запятую ("BTC,USDT") или None для всех
+        params = [f"accountType={account_type}"]
+        if coins:
+            params.append(f"coin={coins}")
+        qs = "&".join(params)
+        url = f"{self.base_url}/v5/account/wallet-balance?{qs}"
+        r = requests.get(url, headers=self._headers(qs), timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+    def get_positions(self, category="linear", symbol=None, settle_coin=None):
+        params = [f"category={category}"]
+        if symbol:
+            params.append(f"symbol={symbol}")
+        if settle_coin:
+            params.append(f"settleCoin={settle_coin}")
+        qs = "&".join(params)
+        url = f"{self.base_url}/v5/position/list?{qs}"
+        r = requests.get(url, headers=self._headers(qs), timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+# Пример:
+# client = BybitClient(API_KEY, API_SECRET)
+# wb = client.get_wallet_balance("UNIFIED", coins="BTC,USDT")
+# btc_qty = qty_from_wallet_balance_coin_list(wb, "BTC")
+# pos = client.get_positions(category="linear", settle_coin="USDT")
+---------------------------------
+
+КАК СРАВНИТЬ С ДОКАМИ (что проверить в папке info):
+- Для wallet-balance: путь `/v5/account/wallet-balance`, заголовки `X-BAPI-*`, формула подписи `timestamp + api_key + recv_window + queryString (без ?)`, сортировка query‑параметров по ключу.
+- Для positions: путь `/v5/position/list`, обязательный `category`, остальные фильтры по необходимости. В UNIFIED перпетуалы USDT = `category=linear`.
+- Для market‑тикеров: `/v5/market/tickers?category=spot|linear|inverse&symbol=...` — полезно, если пересчитываете USD↔BTC.
+
+КОДОВЫЕ УЛУЧШЕНИЯ В SIMPLE VERSION
+1) Decimal везде, где количество/деньги
+   - При чтении чисел из JSON: `Decimal(c.get('walletBalance', '0'))`
+   - Не используйте float для денег.
+
+2) Чёткое разделение «количество» vs «стоимость»
+   - Для каждой монеты храните обе величины: qty (walletBalance) и usd_value (usdValue).
+   - Не смешивайте их при отображении.
+
+3) Слой модели над API
+   - Заверните ответы Bybit в dataclass'ы: `WalletCoin(coin, qty: Decimal, usd: Decimal)`; `Position(symbol, side, qty, avgPrice, unrealPnl, ...)`.
+   - Это снизит количество «маговских строк» в UI и ошибок ключей.
+
+4) Обновление UI и кэш
+   - Если есть кэш/DB, обновляйте запись по ключу (accountType, coin). Используйте upsert с updated_at.
+   - Ставьте TTL кэша для справочников (например, 5–10с), чтобы не «дёргать» API на каждом кадре.
+
+5) Логирование и диагностика
+   - Логируйте исходный `queryString` и `SIGN`, retCode/retMsg, traceId из заголовка ответа.
+   - Для спорных кейсов сохраняйте «сырой» ответ в файл (dev‑режим).
+
+6) Позиции и категории
+   - Для UNIFIED в тестнете убедитесь, что торгуете именно USDT‑перпетуалами → `category=linear`.
+   - Для спота позиции как таковые отсутствуют — там балансы монет (спот позиции = монеты на споте).
+
+7) UI‑форматирование
+   - При показе количества BTC не форматируйте через `.0f`; используйте `f"{btc_qty:.8f}"` или локаль‑зависимый, но с 8 знаками.
+
+8) Ошибки подписи 10004 (на будущее)
+   - Держите одну функцию построения подписи и используйте её и в программе, и в Postman (одна логика → меньше расхождений).
+   - Вынесите сортировку query и форматирование body (для POST) в утилиту.
+
+ГОТОВЫЕ ШАБЛОНЫ ЗАПРОСОВ ДЛЯ POSTMAN (вставляйте в URL, если окружение настроено)
+1) Баланс UNIFIED (конкретные монеты):
+   GET {{base_url}}/v5/account/wallet-balance?accountType=UNIFIED&coin=BTC,USDT
+
+2) Все позиции по USDT‑перпетуалам:
+   GET {{base_url}}/v5/position/list?category=linear&settleCoin=USDT
+
+3) Позиции по конкретному символу:
+   GET {{base_url}}/v5/position/list?category=linear&symbol=BTCUSDT
+
+4) Маркет‑тикер спот BTCUSDT:
+   GET {{base_url}}/v5/market/tickers?category=spot&symbol=BTCUSDT
+
+
+- Найдите место в UI, где выводится «Количество BTC». Проверьте, что берётся `walletBalance` для монеты 'BTC' из `result.list[0].coin[]`.
+- Убедитесь, что тип — Decimal и форматирование отображает дробную часть.
+- Если количество берёте из позиций деривативов — там поле qty в позициях, но это не баланс кошелька. Для «сколько BTC у меня на споте/кошельке» всегда идите в `/v5/account/wallet-balance`.
+
+Если покажете конкретную функцию/строки отрисовки BTC, укажу точные изменения по строкам.

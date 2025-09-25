@@ -1,0 +1,282 @@
+
+Спотовая торговля на Bybit
+=========================
+
+Этот документ содержит краткое руководство по реализации спотовой торговли в вашем боте, используя API Bybit V5. Здесь описаны основные эндпоинты для получения списка доступных инструментов, получения текущих цен, истории котировок, просмотра баланса и размещения ордеров, а также приведены примеры кода на Python. Все примеры ориентированы на тестовую сеть (`https://api-testnet.bybit.com`), но будут работать и на основной сети после замены `base_url` и ключей.
+
+## Ключевые понятия
+
+* **Спотовая торговля** – это прямой обмен одной монеты на другую. После совершения сделки актив появляется на вашем балансе. На споте нет понятия плеча, ликвидации и шорта; позиция представляет собой фактический остаток монет.
+* **Категория** – параметр `category` в API, определяющий тип рынка. Для спота используйте `spot`https://bybit-exchange.github.io/docs/v5/market/tickers#:~:text=HTTP%20Request. Другие категории (`linear`, `inverse`, `option`) относятся к деривативам.
+* **Инструмент (symbol)** – торговая пара, например `BTCUSDT`. На споте вы покупаете или продаёте базовую монету (BTC) за котировочную (USDT).
+
+## Список доступных спотовых инструментов
+
+Для отображения всех доступных для торговли пар используйте публичный эндпоинт:
+
+```
+GET /v5/market/instruments-info
+```
+
+Параметры:
+
+| Параметр | Обязательный | Описание |
+|---------|-------------|----------|
+| `category=spot` | да | Тип рынка: спот |
+| `status=Trading` | нет | Вернуть только активные инструменты |
+| `limit=1000` | нет | Количество результатов (до 1000 за запрос) |
+| `cursor` | нет | Пагинация: значение из `nextPageCursor` предыдущего ответа |
+
+В Postman или Python добавьте эти параметры в запрос. Ответ содержит поле `result.list`, где для каждого инструмента указаны `symbol`, `status`, минимальный шаг цены и количества (фильтры `priceFilter` и `lotSizeFilter`) и другие параметры.
+
+Пример Python:
+
+```python
+import httpx
+
+BASE_URL = "https://api-testnet.bybit.com"
+
+async def get_spot_instruments():
+    params = {"category": "spot", "status": "Trading", "limit": 1000}
+    async with httpx.AsyncClient() as client:
+        instruments = []
+        cursor = None
+        while True:
+            if cursor:
+                params["cursor"] = cursor
+            resp = await client.get(f"{BASE_URL}/v5/market/instruments-info", params=params)
+            data = resp.json()["result"]
+            instruments += data["list"]
+            cursor = data.get("nextPageCursor")
+            if not cursor:
+                break
+        return instruments
+```
+
+## Текущие цены
+
+Для получения последних цен по всем спотовым парам используйте эндпоинт `GET /v5/market/tickers` с параметром `category=spot`https://bybit-exchange.github.io/docs/v5/market/tickers#:~:text=HTTP%20Request. При необходимости можно указать конкретный `symbol`.
+
+Пример запроса:
+
+```
+GET /v5/market/tickers?category=spot
+```
+
+Ответ в `result.list` включает `lastPrice`, `bid1Price`, `ask1Price`, `price24hPcnt`, `highPrice24h`, `lowPrice24h` и объёмы. Эти значения можно отобразить в интерфейсе бота.
+
+Пример Python:
+
+```python
+async def get_spot_tickers():
+    params = {"category": "spot"}
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"{BASE_URL}/v5/market/tickers", params=params)
+        return resp.json()["result"]["list"]
+```
+
+## История цен (свечи)
+
+Для анализа и построения графиков используйте эндпоинт `GET /v5/market/kline`:
+
+```
+GET /v5/market/kline?category=spot&symbol=BTCUSDT&interval=1&limit=200
+```
+
+Параметры:
+
+| Параметр | Описание |
+|---------|----------|
+| `category=spot` | тип рынка |
+| `symbol` | тикер (например `BTCUSDT`) |
+| `interval` | таймфрейм (1,3,5,15,30,60,120,240,360,720,D,W,M) |
+| `limit` | количество свечей (по умолчанию 200) |
+| `start`/`end` | временной диапазон (мс; опционально) |
+
+Ответ — массив [startTime, open, high, low, close, volume, turnover]. Сохраняйте эти данные в локальной БД (например, SQLite) и обновляйте по таймеру.
+
+## Просмотр баланса
+
+Спотовые остатки хранятся в едином счёте. Используйте эндпоинт:
+
+```
+GET /v5/account/wallet-balance
+```
+
+Параметры: `accountType=UNIFIED` (для UTA) и `coin` (опционально). Этот запрос требует аутентификацию. В ответе для каждой монеты присутствуют поля `walletBalance` (количество монет) и `usdValue` (эквивалент в долларах). Отображайте `walletBalance` как количество, а `usdValue` или `lastPrice * walletBalance` как стоимость.
+
+## Размещение ордеров на споте
+
+Ордеры размещаются через `POST /v5/order/create`. Обязательные поля для спота:
+
+| Поле | Описание |
+|-----|---------|
+| `category` | `spot` |
+| `symbol` | тикер, например `BTCUSDT` |
+| `side` | `Buy` или `Sell` |
+| `orderType` | `Market` (рыночный) или `Limit` (лимитный) |
+| `qty` | количество базовой монеты (строка) |
+| `price` | цена (для лимитного) |
+
+Также можно указать `timeInForce` (`GTC`, `IOC`, `FOK`) и `orderLinkId` (кастомный ID). Пример рыночного ордера на покупку 0.002 BTC:
+
+```json
+{
+  "category": "spot",
+  "symbol": "BTCUSDT",
+  "side": "Buy",
+  "orderType": "Market",
+  "qty": "0.002"
+}
+```
+
+Запросы необходимо подписывать. Строка для подписи формируется как `timestamp + api_key + recv_window + queryString + bodyString` и подписывается HMAC‑SHA256https://bybit-exchange.github.io/docs/v5/market/tickers#:~:text=HTTP%20Request. Образец кода и готовые функции для подписи приведены в примерах ниже.
+
+### Пример Python‑клиента для спота
+
+```python
+import hmac
+import hashlib
+import time
+import httpx
+import json
+
+class BybitSpotClient:
+    def __init__(self, api_key: str, api_secret: str, base_url: str):
+        self.api_key = api_key
+        self.api_secret = api_secret.encode()
+        self.base_url = base_url.rstrip('/')
+
+    def _sign(self, query_string: str, body: str) -> str:
+        timestamp = str(int(time.time() * 1000))
+        recv_window = "5000"
+        payload = timestamp + self.api_key + recv_window + query_string + body
+        signature = hmac.new(self.api_secret, payload.encode(), hashlib.sha256).hexdigest()
+        return timestamp, recv_window, signature
+
+    async def _request(self, method: str, endpoint: str, params: dict = None, json_body: dict = None):
+        params = params or {}
+        json_body = json_body or {}
+        # Build query string sorted by key
+        query_items = [f"{k}={v}" for k, v in sorted(params.items()) if v != ""]
+        query_string = "&".join(query_items)
+        body_str = json.dumps(json_body, separators=(",", ":")) if json_body else ""
+        timestamp, recv_window, sign = self._sign(query_string, body_str)
+        headers = {
+            "X-BAPI-API-KEY": self.api_key,
+            "X-BAPI-TIMESTAMP": timestamp,
+            "X-BAPI-RECV-WINDOW": recv_window,
+            "X-BAPI-SIGN": sign,
+            "X-BAPI-SIGN-TYPE": "2",
+            "Content-Type": "application/json"
+        }
+        url = f"{self.base_url}{endpoint}"
+        async with httpx.AsyncClient() as client:
+            if method == "GET":
+                resp = await client.get(url, params=params, headers=headers)
+            elif method == "POST":
+                resp = await client.post(url, params=params, json=json_body, headers=headers)
+            else:
+                raise ValueError("Unsupported method")
+        data = resp.json()
+        if data.get("retCode") != 0:
+            raise Exception(f"API error: {data.get('retCode')} {data.get('retMsg')}")
+        return data.get("result", {})
+
+    async def get_instruments(self, status="Trading", limit=1000):
+        params = {"category": "spot", "status": status, "limit": limit}
+        return await self._request("GET", "/v5/market/instruments-info", params)
+
+    async def get_tickers(self, symbol: str = None):
+        params = {"category": "spot"}
+        if symbol:
+            params["symbol"] = symbol
+        return await self._request("GET", "/v5/market/tickers", params)
+
+    async def get_kline(self, symbol: str, interval: str = "1", limit: int = 200):
+        params = {"category": "spot", "symbol": symbol, "interval": interval, "limit": limit}
+        return await self._request("GET", "/v5/market/kline", params)
+
+    async def get_balance(self, coin: str = None):
+        params = {"accountType": "UNIFIED"}
+        if coin:
+            params["coin"] = coin
+        return await self._request("GET", "/v5/account/wallet-balance", params)
+
+    async def place_order(self, symbol: str, side: str, order_type: str, qty: str, price: str = None):
+        body = {
+            "category": "spot",
+            "symbol": symbol,
+            "side": side,
+            "orderType": order_type,
+            "qty": qty
+        }
+        if order_type == "Limit":
+            if price is None:
+                raise ValueError("price required for limit order")
+            body["price"] = price
+            body["timeInForce"] = "GTC"
+        return await self._request("POST", "/v5/order/create", json_body=body)
+
+    async def cancel_order(self, order_id: str, symbol: str):
+        body = {"category": "spot", "symbol": symbol, "orderId": order_id}
+        return await self._request("POST", "/v5/order/cancel", json_body=body)
+
+```
+
+Этот клиент реализует все основные функции для спотовой торговли: получение инструментов, котировок, свечей, баланса и размещение/отмена ордеров. Он использует асинхронный `httpx` и формирует подпись HMAC‑SHA256 в формате, требуемом Bybit.
+
+## Логика работы бота
+
+1. **Загрузка инструментов**: при старте приложения запрашивайте `instruments-info` для категории `spot` и сохраните список в локальной базе или в памяти. Обновляйте список, например, раз в час.
+2. **Подгрузка котировок**: регулярно (например, каждую секунду) обновляйте котировки через `market/tickers`. Для снижения нагрузки лучше использовать WebSocket‑поток `tickers` в будущем.
+3. **История свечей**: при выборе инструмента в UI загружайте свежие свечи (например, последние 200 минутных свечей) и строьте график. Обновляйте историю при переключении инструмента или по таймеру.
+4. **Баланс и ордера**: запрашивайте баланс при открытии вкладки кошелька и после выполнения ордера. Размещая ордер, проверяйте, достаточно ли средств.
+5. **UI**: отображайте список доступных инструментов, текущие цены и графики. Параметры задаются пользователю (символ, количество, цена). Отображайте статус ордера и баланс после выполнения.
+
+## Обоснование выбора спота
+
+* **Простота** – работа со спотом не требует управления плечом, ликвидациями и маржой. Это снижает сложность логики и риск неожиданных закрытий позиций.
+* **Прозрачность** – баланс отражает реальное количество монет. Позиции проще интерпретировать: нет виртуальных контрактов, только реальные активы.
+* **Предсказуемость** – спотовые рынки, особенно пары с высокой ликвидностью (BTCUSDT, ETHUSDT), имеют меньше резких движений по сравнению с альткоинами; это упрощает анализ данных.
+* **Риски** – единственный риск — движение цены актива. Нет риска ликвидации, но стратегия всё равно должна учитывать волатильность.
+
+Таким образом, для первой версии торгового бота логично начать со спота: вы сможете сосредоточиться на правильной загрузке данных, отображении баланса, цен и истории, а также на логике размещения ордеров. Когда спотовая торговля будет реализована и протестирована, можно добавить поддержку деривативов.
+если коротко по твоим вопросам прямо здесь:
+
+как вывести список доступных спотовых «позиций»
+
+на споте «позиция» — это фактически актив из кошелька. чтобы показать доступные торгуемые пары:
+
+инструменты (список пар): GET /v5/market/instruments-info?category=spot&status=Trading
+
+тикеры (цены): GET /v5/market/tickers?category=spot[&symbol=BTCUSDT]
+
+свечи (история): GET /v5/market/kline?category=spot&symbol=BTCUSDT&interval=1&limit=200
+эти вызовы публичные — без подписи. их достаточно, чтобы отрисовать в UI «все доступные пары» + текущие цены и историю.
+
+как получить баланс и показать, что у тебя есть (usdt, btc и т.д.)
+
+баланс (UNIFIED): GET /v5/account/wallet-balance?accountType=UNIFIED[&coin=USDT] (нужна подпись).
+парси список coin[] в ответе — там будут твои монеты (BTC, USDT, …) и их количество. дробные BTC — нормальная история (например, 0.042). используй Decimal, не float.
+
+как делать спот-ордера
+
+создать ордер: POST /v5/order/create с category=spot + symbol + side + orderType (Market/Limit) + qty (+ price для лимита).
+
+отменить: POST /v5/order/cancel с category=spot и orderId или orderLinkId.
+оба приватные — нужна подпись HMAC (в файле есть готовая функция _sign и пример).
+
+история цен и текущая цена для стратегии
+
+история свечей: GET /v5/market/kline (паблик) → кэшируй в SQLite, чтобы не «дергать» одно и то же.
+
+текущая цена: либо GET /v5/market/tickers, либо лучше WebSocket паблик-каналы (меньше лагов и лимитов). для начала REST хватит.
+
+почему в интерфейсе BTC «меньше 1»
+
+потому что это нормальные дробные значения (0.0…); проверь, что ты не приводишь к int и не округляешь до 0. сформатируй через Decimal('0.00000001').
+
+стоит ли фокусироваться только на одном виде активов
+
+да. для старта спот — оптимальный выбор: проще и стабильнее для UI/логики. реально и UI будет отзывчивее, и рисков/подводных камней меньше (без маржи/ликвидации). когда всё станет стабильным — можно добавлять деривативы.

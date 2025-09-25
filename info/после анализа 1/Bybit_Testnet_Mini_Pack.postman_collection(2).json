@@ -1,0 +1,387 @@
+{
+  "info": {
+    "_postman_id": "66b086a4-8a88-40a7-b80f-46268618ebde",
+    "name": "Bybit Testnet Mini Pack",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "FUND balance",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-BAPI-API-KEY",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-TIMESTAMP",
+            "value": "{{timestamp}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-SIGN",
+            "value": "{{signature}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-RECV-WINDOW",
+            "value": "{{recv_window}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/v5/asset/transfer/query-account-coins-balance?accountType={{accountType}}&coin={{coin}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "v5",
+            "asset",
+            "transfer",
+            "query-account-coins-balance"
+          ],
+          "query": [
+            {
+              "key": "accountType",
+              "value": "{{accountType}}"
+            },
+            {
+              "key": "coin",
+              "value": "{{coin}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "UNIFIED balance",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-BAPI-API-KEY",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-TIMESTAMP",
+            "value": "{{timestamp}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-SIGN",
+            "value": "{{signature}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-RECV-WINDOW",
+            "value": "{{recv_window}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/v5/account/wallet-balance?accountType={{walletAccountType}}&coin={{coin}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "v5",
+            "account",
+            "wallet-balance"
+          ],
+          "query": [
+            {
+              "key": "accountType",
+              "value": "{{walletAccountType}}"
+            },
+            {
+              "key": "coin",
+              "value": "{{coin}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Transferable coins FUND\u2192UNIFIED",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-BAPI-API-KEY",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-TIMESTAMP",
+            "value": "{{timestamp}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-SIGN",
+            "value": "{{signature}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-RECV-WINDOW",
+            "value": "{{recv_window}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/v5/asset/transfer/query-transfer-coin-list?fromAccountType={{fromAccountType}}&toAccountType={{toAccountType}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "v5",
+            "asset",
+            "transfer",
+            "query-transfer-coin-list"
+          ],
+          "query": [
+            {
+              "key": "fromAccountType",
+              "value": "{{fromAccountType}}"
+            },
+            {
+              "key": "toAccountType",
+              "value": "{{toAccountType}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Inter Transfer FUND\u2192UNIFIED",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-BAPI-API-KEY",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-TIMESTAMP",
+            "value": "{{timestamp}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-SIGN",
+            "value": "{{signature}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-RECV-WINDOW",
+            "value": "{{recv_window}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"transferId\": \"{{transferId}}\",\n  \"coin\": \"{{coin}}\",\n  \"amount\": \"{{amount}}\",\n  \"fromAccountType\": \"{{fromAccountType}}\",\n  \"toAccountType\": \"{{toAccountType}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/v5/asset/transfer/inter-transfer",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "v5",
+            "asset",
+            "transfer",
+            "inter-transfer"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Set Deposit To Account = UNIFIED",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-BAPI-API-KEY",
+            "value": "{{api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-TIMESTAMP",
+            "value": "{{timestamp}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-SIGN",
+            "value": "{{signature}}",
+            "type": "text"
+          },
+          {
+            "key": "X-BAPI-RECV-WINDOW",
+            "value": "{{recv_window}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"accountType\": \"{{depositAccountType}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/v5/asset/deposit/deposit-to-account",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "v5",
+            "asset",
+            "deposit",
+            "deposit-to-account"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Market ticker",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/v5/market/tickers?category={{category}}&symbol={{symbol}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "v5",
+            "market",
+            "tickers"
+          ],
+          "query": [
+            {
+              "key": "category",
+              "value": "{{category}}"
+            },
+            {
+              "key": "symbol",
+              "value": "{{symbol}}"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "",
+          "// === Helpers ===",
+          "function getVar(name, defVal='') {",
+          "  const env = pm.environment.get(name);",
+          "  if (env !== undefined && env !== null) return String(env);",
+          "  const col = pm.collectionVariables.get(name);",
+          "  if (col !== undefined && col !== null) return String(col);",
+          "  return String(defVal);",
+          "}",
+          "",
+          "// === Core vars ===",
+          "const apiKey     = getVar('api_key').trim();",
+          "const apiSecret  = getVar('api_secret').trim();",
+          "let   recvWindow = getVar('recv_window', '5000').trim();",
+          "if (!recvWindow) recvWindow = '5000';",
+          "",
+          "const timestamp = Date.now().toString();",
+          "",
+          "// === Build queryString from actual URL params (with variable substitution) ===",
+          "const pairs = [];",
+          "if (pm.request.url && pm.request.url.query) {",
+          "  pm.request.url.query.each(q => {",
+          "    if (q && q.key != null) {",
+          "      const k = pm.variables.replaceIn(String(q.key));",
+          "      const v = pm.variables.replaceIn(String(q.value ?? ''));",
+          "      pairs.push([k, v]);",
+          "    }",
+          "  });",
+          "}",
+          "pairs.sort((a, b) => a[0].localeCompare(b[0]));",
+          "const queryString = pairs.map(([k, v]) => `${k}=${v}`).join('&');",
+          "",
+          "// === Optional: generate transferId (UUID) if missing and this request needs it ===",
+          "function uuidv4() {",
+          "  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {",
+          "    const r = Math.random() * 16 | 0;",
+          "    const v = c === 'x' ? r : (r & 0x3 | 0x8);",
+          "    return v.toString(16);",
+          "  });",
+          "}",
+          "if (!pm.environment.get('transferId') || pm.environment.get('transferId') === '') {",
+          "  pm.environment.set('transferId', uuidv4());",
+          "}",
+          "",
+          "// === Prepare body for signature (for POST JSON sign exactly what we send) ===",
+          "let bodyRaw = '';",
+          "if (pm.request.method !== 'GET' && pm.request.body) {",
+          "  if (pm.request.body.mode === 'raw') {",
+          "    bodyRaw = pm.variables.replaceIn(pm.request.body.raw || '');",
+          "    // Ensure what we sign is exactly what we send",
+          "    pm.request.body.update(bodyRaw);",
+          "  } else if (pm.request.body.mode === 'urlencoded') {",
+          "    const bodyPairs = [];",
+          "    pm.request.body.urlencoded.each(el => {",
+          "      if (el && !el.disabled) {",
+          "        const k = pm.variables.replaceIn(String(el.key));",
+          "        const v = pm.variables.replaceIn(String(el.value || ''));",
+          "        bodyPairs.push([k, v]);",
+          "      }",
+          "    });",
+          "    bodyPairs.sort((a, b) => a[0].localeCompare(b[0]));",
+          "    bodyRaw = bodyPairs.map(([k, v]) => `${k}=${v}`).join('&');",
+          "  }",
+          "}",
+          "",
+          "// === Choose payload according to method ===",
+          "const payload = (pm.request.method === 'GET') ? queryString : bodyRaw;",
+          "",
+          "// === Compose sign string and HMAC-SHA256 ===",
+          "const signStr = timestamp + apiKey + recvWindow + payload;",
+          "",
+          "const signature = CryptoJS.enc.Hex.stringify(",
+          "  CryptoJS.HmacSHA256(signStr, apiSecret)",
+          ");",
+          "",
+          "// === Expose to environment for headers ===",
+          "pm.environment.set('timestamp', timestamp);",
+          "pm.environment.set('signature', signature);",
+          "",
+          "// === Debug ===",
+          "console.log('SIGN STRING =>', signStr);",
+          "console.log('SIGNATURE  =>', signature);",
+          ""
+        ]
+      }
+    }
+  ]
+}

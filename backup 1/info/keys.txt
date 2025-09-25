@@ -1,0 +1,9 @@
+testnet keys:
+ api key 9HlqDp2h1HwSP8Ydnk
+api secret hXpgFc1Wd97IzRuqBV96wCcScH2s7LDLSKij
+permission Contracts - Orders Positions  , USDC Contracts - Trade  , Unified Trading - Trade  , SPOT - Trade  , Exchange - Convert，Exchange History  , P2P - Orders Ads  , Bybit Pay - Orders 
+кстати я дал все разрешения на использование апи по адресу 77.105.135.58, кроме разрешений account transfer, subaccount transfer, withdrawal
+данные телеграм бота: 
+7531175068:AAEojRSOkWGcnhNq-KikeJfjQSMyHSed1a0
+@vlastelin8
+Id: 377042639

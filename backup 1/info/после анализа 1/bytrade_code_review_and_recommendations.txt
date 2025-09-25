@@ -1,0 +1,172 @@
+BYTRADE — Технический аудит и рекомендации
+Дата: 2025-09-03 05:10:57
+
+КРАТКОЕ РЕЗЮМЕ
+- Заниженное количество активов (≈51) вызвано двумя факторами в src/gui/tabs/markets_tab.py:
+  1) Фильтр только по символам, оканчивающимся на USDT (отсеивает USDC, BTC-quoted и др.).
+  2) Жёсткий лимит обработки на ~51 запись (порог processed_count > 50).
+- MarketsTab принудительно создаёт клиента с testnet=True — переключатель mainnet/testnet в приложении это не переопределяет, поэтому вы всегда на тестнете в этой вкладке.
+- Логирование тикеров в БД уже реализовано, но upsert ищет записи только по symbol (без environment), что может смешивать данные testnet и mainnet.
+- UI использует QTableWidget; при большом количестве строк возможны лаги. Лучше перейти на QTableView + QAbstractTableModel + QSortFilterProxyModel.
+- Во вкладке «Функции платформы» есть симуляция индикаторов (random) — это placeholder, не реальные данные.
+- Автorefresh каждые 10 секунд — ок, но требуется контроль частоты запросов и TTL кэша, чтобы не «дергать» API лишний раз.
+
+ДЕТАЛИ ПО КЛЮЧЕВЫМ ПРОБЛЕМАМ И ИСПРАВЛЕНИЯ
+
+1) Почему всего ~51 актив
+   • Фильтр USDT:
+     В MarketDataWorker.run тикеры отбрасываются, если символ не оканчивается на 'USDT'.
+     Рекомендация: сделать фильтр по quote (USDT/USDC/BTC/ALL) управляемым из UI (комбо-бокс) и по умолчанию не ограничивать.
+   • Жёсткий лимит 51:
+     Есть проверка processed_count > 50 — фактически режет список до ~51 позиции.
+     Рекомендация: убрать лимит либо вынести его в конфиг/настройку UI (например, «макс. строк на страницу») и добавить пагинацию/виртуализацию.
+
+   Предлагаемый патч (концепт, единый diff-формат):
+   --- a/src/gui/tabs/markets_tab.py
+   +++ b/src/gui/tabs/markets_tab.py
+   @@
+   -    # Фильтруем только USDT пары для ускорения
+   -    symbol = ticker.get('symbol', '')
+   -    if not symbol.endswith('USDT'):
+   -        continue
+   +    # Фильтр по котируемой валюте (настраивается в UI: 'ALL'|'USDT'|'USDC'|'BTC')
+   +    symbol = ticker.get('symbol', '')
+   +    quote = self._selected_quote()  # новый метод читает значение из combo-бокса
+   +    if quote != 'ALL' and not symbol.endswith(quote):
+   +        continue
+   @@
+   -    if not (is_new_symbol or is_outdated):
+   -        if processed_count > 50:  # Ограничиваем количество для производительности
+   -            continue
+   +    # Жёсткий лимит отключен; используем пагинацию/виртуализацию таблицы.
+   +    # Если нужен лимит — берём из self.config.ui.max_rows или из UI-поля «строк на страницу».
+
+   Дополнительно:
+   • Добавить combo «Quote: ALL / USDT / USDC / BTC» в панель фильтров.
+   • Если остаётся QTableWidget — включить построчную подгрузку или «страницы» по N строк. Идеально — перейти на модель/представление.
+
+2) Принудительный testnet в MarketsTab
+   Проблема: В _init_bybit_client() захардкожено testnet=True и берутся ключи «testnet», вкладка игнорирует глобальный режим приложения.
+   Рекомендация: использовать self.config.is_testnet() и передавать соответствующие ключи. При смене режима — переинициализировать клиента.
+
+   Патч (фрагмент):
+   --- a/src/gui/tabs/markets_tab.py
+   +++ b/src/gui/tabs/markets_tab.py
+   @@
+   -    # Принудительно используем testnet
+   -    testnet = True
+   -    environment = 'testnet'
+   +    testnet = self.config.is_testnet()
+   +    environment = 'testnet' if testnet else 'mainnet'
+
+3) Разделение данных в БД по окружению
+   Проблема: save_ticker_data делает upsert по symbol, не учитывая environment ⇒ риск перезаписи mainnet/testnet.
+   Рекомендация:
+   • В запрос upsert добавить фильтр по environment.
+   • Ввести уникальный индекс (environment, symbol).
+   • Хранить environment в каждой записи.
+
+   Патч (SQLAlchemy, фрагменты):
+   --- a/src/database/db_manager.py
+   +++ b/src/database/db_manager.py
+   @@ class TickerData(Base):
+   -    __table_args__ = (Index('ix_ticker_symbol', 'symbol'),)
+   +    __table_args__ = (
+   +        Index('ix_ticker_symbol', 'symbol'),
+   +        Index('ux_env_symbol', 'environment', 'symbol', unique=True),
+   +    )
+   @@ class DatabaseManager:
+   -    ticker_db = session.query(TickerData).filter_by(symbol=item['symbol']).one_or_none()
+   +    ticker_db = (session.query(TickerData)
+   +                 .filter_by(symbol=item['symbol'], environment=self.environment)
+   +                 .one_or_none())
+
+4) Источник «всех активов»
+   Сейчас вы берёте только /v5/market/tickers (category='spot'), что даёт актуальные цены, но не полный универсум инструментов всех категорий.
+   Рекомендация: для полного списка использовать /v5/market/instruments-info по категориям (spot/linear/inverse/option) и кэшировать его отдельно.
+   Далее подкачивать цены через /v5/market/tickers для нужной категории/символов. Это даст корректный перечень активов и атрибутов (lotSize, minOrderQty и т.п.).
+
+   Эскиз кода:
+   instruments = []
+   for cat in ["spot", "linear", "inverse", "option"]:
+       r = bybit_client.get_instruments_info(category=cat)
+       instruments.extend(r["result"]["list"])
+   # сохранить в таблицу instruments (environment, category, symbol, status, lotSize, tickSize, ...)
+
+5) Производительность и отсутствие лагов
+   • Перейти на QTableView + QAbstractTableModel вместо QTableWidget (существенно быстрее на больших выборках).
+   • Использовать QSortFilterProxyModel для локального поиска/фильтров без пересоздания содержимого.
+   • Отрисовка: установить setUniformRowHeights(True) при однородных строках.
+   • Для графика — обновлять только выбранный актив, а не весь список.
+   • Интервалы: оставить 10–15 сек, а обновление тяжёлых колонок делать реже (например, объём/24h каждые 60 сек).
+   • Кэш: TTL на тикеры 15–60 сек; использовать get_outdated_tickers(max_age_minutes=...) для приоритезации.
+
+6) Реальные vs фейковые данные
+   • В Platform Functions обнаружены random.* генерации для индикаторов — это заглушки. Заменить на реальные расчёты по историческим свечам (kline /v5/market/kline).
+   • Во всех вкладках убрать заглушки перед релизом, явно маркировать «DEMO» если временно нужно показать UI.
+
+7) UX/Управляемость
+   • Добавить индикатор режима (у вас уже есть в MainWindow) на шапке MarketsTab, чтобы не было путаницы.
+   • Кнопка «Обновить» должна быть недоступна во время активного запроса (у вас учтено) и включаться по сигналу finished — это уже реализовано.
+   • В фильтрах: добавить комбобокс категории (Spot / Futures / Options) и Quote (ALL / USDT / USDC / BTC); синхронизировать с источником данных.
+
+8) Минимальный размер и адаптивность окна
+   • Установить разумный минимум, при котором всё читаемо (например, MainWindow.setMinimumSize(1100, 720)).
+   • В таблицах — ResizeToContents только для первой и последней колонок; остальные Stretch (это уже частично есть).
+
+9) Политика частоты запросов и логирование
+   • Централизовать rate limiting в BybitClient (_make_request_with_retry уже есть; добавить глобальный интервал между однотипными вызовами).
+   • Журнал api_requests сохраняется — продолжить, добавить метрики: count/мин, средняя длительность, retCode распределение.
+   • При retCode != 0 — показывать окно с краткой причиной и подсказкой (переключиться на mainnet/testnet, проверить SPOT включён ли и т.д.).
+
+10) Доп. структуры БД
+   • Таблица instruments (environment, category, symbol, status, lotSize, tickSize, quote, base, ...), обновлять раз в N часов.
+   • Таблица tickers (environment, symbol, ts, price, change24h, volume24h, high24h, low24h) — уже есть, добавить уникальный ключ (env,symbol).
+
+КОНКРЕТНЫЕ ЗАДАЧИ ДЛЯ ИСПРАВЛЕНИЯ (CHECKLIST)
+[ ] MarketsTab: убрать жёсткий лимит 51; сделать управляемым из конфигурации или через пагинацию/виртуализацию.
+[ ] MarketsTab: убрать фильтр только USDT; добавить UI-фильтр Quote.
+[ ] MarketsTab: использовать config.is_testnet() вместо захардкоженного testnet=True; реактивно пересоздавать клиента при смене режима.
+[ ] DatabaseManager: upsert по (environment, symbol); добавить уникальный индекс ux_env_symbol.
+[ ] Добавить загрузку / кэширование полного списка инструментов через /v5/market/instruments-info по всем категориям + отдельная таблица instruments.
+[ ] Перевести таблицу активов на QTableView + модель/прокси-модель; включить эффективные resize и сортировку.
+[ ] Заменить все random-заглушки на реальные расчёты по свечам (kline) или явно пометить «DEMO» для отладки.
+[ ] Добавить глобальный rate limit и метрики по API в BybitClient.
+[ ] Ввести TTL для тикеров (например, 30–60 сек); использовать приоритеты обновления (у вас уже начато — развить).
+[ ] Установить минимальный размер окна приложения и проверить адаптивность контролов.
+
+ПРИМЕРЫ ТИПОВЫХ МЕТОДОВ (эскизы)
+
+# UI: выбранный Quote в MarketsTab
+def _selected_quote(self) -> str:
+    try:
+        return self.quote_combo.currentText()  # 'ALL'|'USDT'|'USDC'|'BTC'
+    except Exception:
+        return 'ALL'
+
+# Клиент: обёртка для instruments-info
+def get_instruments_info(self, category: str, symbol: str = None) -> dict:
+    params = {'category': category}
+    if symbol:
+        params['symbol'] = symbol
+    return self._make_request_with_retry(self.client.get_instruments_info, **params)
+
+# DB: схема instruments (SQLAlchemy эскиз)
+class Instrument(Base):
+    __tablename__ = 'instruments'
+    id = Column(Integer, primary_key=True)
+    environment = Column(String, index=True, nullable=False)
+    category = Column(String, index=True, nullable=False)  # spot/linear/inverse/option
+    symbol = Column(String, index=True, nullable=False)
+    base = Column(String)
+    quote = Column(String)
+    status = Column(String)
+    lot_size = Column(String)
+    tick_size = Column(String)
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (Index('ux_instrument_env_sym', 'environment', 'symbol', unique=True),)
+
+ЗАКЛЮЧЕНИЕ
+- Главный источник «51 позиция» — искусственный лимит и фильтр по USDT. Уберите/параметризуйте это — и увидите полноту данных (при корректных ключах и выбранной категории).
+- Для устойчивости и производительности: модельно-представленческий UI, кэш инструментов, upsert по (env, symbol), и управление режимами из общего конфига.
+

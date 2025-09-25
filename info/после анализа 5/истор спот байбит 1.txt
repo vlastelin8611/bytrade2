@@ -1,0 +1,159 @@
+Инструкция: Получение исторических цен по спотовым тикерам Bybit через REST API V5
+
+1) Базовый эндпоинт
+
+GET /v5/market/kline — возвращает исторические свечи.
+Обязательные параметры:
+- category=spot — продуктовая категория (для спота).
+- symbol=BTCUSDT — тикер (CAPS).
+- interval — таймфрейм: 1,3,5,15,30,60,120,240,360,720,D,W,M.
+
+Опционально:
+- start, end — UNIX time в миллисекундах.
+- limit — 1…1000 (по умолчанию 200).
+
+Формат ответа: массив свечей
+[startTime, open, high, low, close, volume, turnover].
+
+2) Примеры запросов
+
+curl (1-часовые свечи BTCUSDT за 24 часа)
+
+    curl 'https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=60&start=1711929600000&end=1712016000000&limit=1000'
+
+Python (requests)
+
+    import time, requests
+
+    BASE = "https://api.bybit.com"
+    def get_klines(symbol, interval, start_ms=None, end_ms=None, limit=1000):
+        params = {
+            "category": "spot",
+            "symbol": symbol.upper(),
+            "interval": str(interval),
+            "limit": limit
+        }
+        if start_ms: params["start"] = int(start_ms)
+        if end_ms:   params["end"] = int(end_ms)
+        r = requests.get(f"{BASE}/v5/market/kline", params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        return data["result"]["list"]
+
+    rows = get_klines("BTCUSDT", 60, 1711929600000, 1712016000000)
+
+Python (официальный SDK pybit)
+
+    from pybit.unified_trading import HTTP
+    session = HTTP(testnet=False)
+    resp = session.get_kline(category="spot", symbol="BTCUSDT", interval="60",
+                             start=1711929600000, end=1712016000000)
+    klines = resp["result"]["list"]
+
+3) Пагинация
+
+-   Максимум 1000 свечей за один запрос.
+-   Чтобы выгрузить длинный диапазон, итерируйтесь по start/end.
+-   Двигаясь вперёд: берёте минимальный startTime и ставите следующий
+    start.
+-   Ответ идёт в обратном порядке по времени.
+
+4) Список доступных спотовых тикеров
+
+GET /v5/market/instruments-info?category=spot — вернёт все пары и
+параметры.
+
+Пример:
+
+    curl 'https://api.bybit.com/v5/market/instruments-info?category=spot'
+
+5) Быстрый снэпшот цен
+
+GET /v5/market/tickers?category=spot&symbol=BTCUSDT — для текущей цены и
+статистики за 24ч.
+
+6) Важные тонкости
+
+-   Времена в миллисекундах (UTC).
+-   Интервалы — строки ("60", "D", …).
+-   Эти эндпоинты не требуют ключа API.
+-   Лимитируйте запросы, чтобы не ловить rate limit.
+-   Для лайва используйте WebSocket.
+-   Порядок свечей — от новых к старым.
+
+7) Пример скачивания всего диапазона
+
+    import math, time, requests, datetime as dt
+
+    BASE = "https://api.bybit.com"
+    INTERVAL_MS = {"1":60_000,"3":180_000,"5":300_000,"15":900_000,"30":1_800_000,
+                   "60":3_600_000,"120":7_200_000,"240":14_400_000,"360":21_600_000,
+                   "720":43_200_000,"D":86_400_000,"W":604_800_000,"M":2_592_000_000}
+
+    def fetch_klines_full(symbol, interval, start_ms, end_ms, limit=1000, sleep=0.2):
+        out, step = [], INTERVAL_MS[str(interval)]
+        cur = int(start_ms)
+        while cur < end_ms:
+            r = requests.get(f"{BASE}/v5/market/kline", params={
+                "category":"spot","symbol":symbol.upper(),"interval":str(interval),
+                "start":cur,"end":end_ms,"limit":limit
+            }, timeout=30)
+            r.raise_for_status()
+            lst = r.json()["result"]["list"]
+            if not lst: break
+            out.extend(lst)
+            oldest = min(int(x[0]) for x in lst)
+            cur = oldest + step
+            time.sleep(sleep)
+        out.sort(key=lambda x: int(x[0]))
+        return out
+ДОПОЛНЕНИЕ!
+Инструкция: Получение исторических цен по спотовым тикерам Bybit через REST API V5 (актуальная версия)
+
+1) Источники
+- Официальная документация Bybit: https://bybit-exchange.github.io/docs/v5/intro
+- Спецификация эндпоинтов в YAML-файле: docs/yml-folder/v5/market.yaml
+- Объявление Bybit о пересмотре лимитов API для институциональных пользователей (начало действия: август 2025)
+
+2) Эндпоинт: GET /v5/market/kline
+
+Обязательные параметры:
+- category — тип рынка: spot, linear, inverse
+- symbol — торговая пара, например BTCUSDT
+- interval — один из: 1,3,5,15,30,60,120,240,360,720,D,W,M
+
+Опциональные параметры:
+- start — начало диапазона, UNIX timestamp в миллисекундах
+- end — конец диапазона, UNIX timestamp в миллисекундах
+- limit — число свечей в ответе; максимум 1000, по умолчанию 200
+
+3) Формат ответа и порядок данных
+- Ответ содержит поле `result.list` — массив свечей: [startTime, open, high, low, close, volume, turnover]
+- startTime — начало свечи в миллисекундах (UTC)
+- volume — объём в базовой валюте; turnover — в валюте котировки
+- Иногда `list` может быть пустым — при отсутствии торговой активности или при неправильно заданных `start` / `end`
+- Не гарантируется фиксированный порядок свечей (от старых к новым или наоборот) — проверяй и сортируй в коде при необходимости
+
+4) Дополнительные эндпоинты
+- /v5/market/time — текущее серверное время (для синхронизации)
+- /v5/market/instruments-info?category=spot — список пар, точности, правила торгов
+- /v5/market/tickers?category=spot&symbol=... — текущая информация по тикеру, включая последние цены и статистику
+
+5) Лимиты запросов (Rate Limits)
+- С ‟августа 2025” Bybit ввёл институциональную систему лимитов API: для Spot, Futures, Options — централизованные лимиты на уровне института, с возможностью настройки по UID
+- Для обычных (не-институциональных) пользователей лимиты значительно ниже; зависит от уровня аккаунта
+- API Brokers могут иметь повышенные лимиты
+
+6) Часто встречающиеся нюансы / ошибки
+- Пустой `list` возможен, если нет свечей в запрошенном интервале
+- Убедись, что timestamps в миллисекундах, а не в секундах
+- Проверяй, что start < end; некорректность этих параметров может приводить к пустым ответам
+- Делай задержки между запросами, особенно при больших диапазонах или множественных тикерах (во избежание превышения лимита)
+- Проверяй порядок свечей; сортируй, если нужно
+
+7) Рекомендации
+- Используй WebSocket-каналы, если нужен стрим или высокая частота обновлений
+- Если выгружаешь большую историю данных — разбивай диапазоны, делай по частям
+- Логируй ошибки ответов API и пустые списки для отладки
+
+КОНЕЦ ИНСТРУКЦИИ

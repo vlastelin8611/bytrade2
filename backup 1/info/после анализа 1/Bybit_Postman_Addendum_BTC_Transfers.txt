@@ -1,0 +1,134 @@
+
+# Дополнение: переводы BTC и работа с несколькими монетами
+
+В дополнение к основному гайду по тестовой сети Bybit приведены примеры и пояснения
+по переводу **BTC** (или любой другой поддерживаемой монеты) между кошельками
+Funding и Unified, а также по получению баланса в разных валютах. Все методы
+используют одну и ту же схему подписи HMAC‑SHA256. Прежде чем выполнять
+переводы, убедитесь, что выбранный вами актив присутствует в списке
+`query-transfer-coin-list` и у вас достаточно средств.
+
+## Как узнать, какие монеты можно переводить
+
+Используйте метод `GET /v5/asset/transfer/query-transfer-coin-list` с
+параметрами `fromAccountType` и `toAccountType`.
+
+Пример для переноса из Funding в Unified:
+
+```
+GET {{base_url}}/v5/asset/transfer/query-transfer-coin-list
+Params:
+  fromAccountType = FUND
+  toAccountType   = UNIFIED
+```
+
+Ответ содержит массив `result.list` с символами валют (например, `BTC`, `ETH`,
+`USDT`, и т.д.) – это монеты, которые можно переводить между выбранными
+кошельками.
+
+## Получение баланса BTC (и любой другой монеты)
+
+### Баланс в Funding
+
+Для Funding‑кошелька Bybit возвращает только **сырое количество** монет (без
+конвертации в USD), поэтому тестовое приложение должно самостоятельно
+конвертировать его по актуальной цене, если нужно.
+
+```
+GET {{base_url}}/v5/asset/transfer/query-account-coins-balance
+Params:
+  accountType = FUND
+  coin        = BTC
+```
+
+Параметр `coin` обязателен для UNIFIED, но для FUND его можно пропустить,
+чтобы получить список всех монет сразу. Если оставить `coin` пустым, сервер
+вернёт баланс всех монет в Funding.
+
+### Баланс в Unified
+
+Для Unified‑счёта используйте метод `GET /v5/account/wallet-balance`.
+Если указать `coin=BTC`, в ответе будет только BTC. Если опустить `coin`,
+вернётся список всех активов. Поле `usdValue` содержит стоимость каждой
+монеты в долларах, а `totalWalletBalance` – общую сумму по счёту в USDhttps://bybit-exchange.github.io/docs/v5/account/wallet-balance#:~:text=,USD%29%3A%20totalWalletBalance.
+
+```
+GET {{base_url}}/v5/account/wallet-balance
+Params:
+  accountType = UNIFIED
+  coin        = BTC   (опционально)
+```
+
+## Перевод BTC между кошельками
+
+Для перевода монет используется метод
+`POST /v5/asset/transfer/inter-transfer`. Тело запроса – объект JSON, где
+указываются:
+
+* `transferId` – уникальный идентификатор перевода (UUID), его можно
+  сгенерировать в pre‑request‑скрипте Postman.
+* `coin` – символ переводимой валюты, например `"BTC"`.
+* `amount` – число в виде строки (допустимы десятичные дроби).
+* `fromAccountType` – откуда переводим (`"FUND"` или `"UNIFIED"`).
+* `toAccountType` – куда переводим (`"UNIFIED"` или `"FUND"`).
+
+### Пример: перевод 1 BTC из Funding в Unified
+
+```
+POST {{base_url}}/v5/asset/transfer/inter-transfer
+Body (raw JSON, *без переносов строк*):
+{
+  "transferId":"{{transferId}}",
+  "coin":"BTC",
+  "amount":"1",
+  "fromAccountType":"FUND",
+  "toAccountType":"UNIFIED"
+}
+```
+
+### Пример: перевод 0.5 BTC из Unified в Funding
+
+```
+POST {{base_url}}/v5/asset/transfer/inter-transfer
+Body (raw JSON):
+{
+  "transferId":"{{transferId}}",
+  "coin":"BTC",
+  "amount":"0.5",
+  "fromAccountType":"UNIFIED",
+  "toAccountType":"FUND"
+}
+```
+
+### Подпись и правильное тело
+
+При подписании POST‑запроса нужно использовать **точно тот JSON**, который
+отправляется на сервер, без лишних пробелов и переводов строк, иначе
+подписи не совпадут (это была причиной ошибки `error sign` в предыдущих
+шагах). В pre‑request‑скрипте рекомендуется брать содержимое
+`pm.request.body.raw`, заменять переменные `{{…}}` и затем записывать обратно
+в `pm.request.body.update(...)` перед расчётом подписи. Полный пример такого
+скрипта приведён в основном гайде и в файле `bybit_api_helpers.py`.
+
+## Конвертация в USD
+
+Баланс Unified уже включает поля `totalEquity` и `usdValue` в долларах
+https://bybit-exchange.github.io/docs/v5/account/wallet-balance#:~:text=,USD%29%3A%20totalWalletBalance. Для Funding, если нужно отобразить эквивалент в USD,
+приложение должно запросить рыночную цену актива через публичный
+эндпоинт `GET /v5/market/tickers` (например, `category=linear&symbol=BTCUSDT` для
+перпетуала или `category=spot&symbol=BTCUSDT` для спота) и умножить количество
+монет на `lastPrice`. Цена на тестовой сети отличается от основной.
+
+## Дополнительные советы
+
+* Переводить монеты можно только между счётами одного UID. Для субаккаунтов
+  потребуются отдельные ключи или указание `memberId` в запросах (см. API).
+* Перед переводом убедитесь, что у вас достаточно свободного `transferBalance`.
+  В Funding‑ответе это поле так и называется, а в Unified переводимая сумма
+  указана в `availableToWithdraw`.
+* Автозачисление депозитов на Unified настраивается через `POST
+  /v5/asset/deposit/deposit-to-account` с `{"accountType":"UNIFIED"}`. Чтобы
+  подпись прошла, JSON должен быть без пробелов, как в примерах.
+
+Этот документ можно использовать как памятку для настройки переводов BTC (и
+любых других монет) как в Postman, так и в собственной программе.

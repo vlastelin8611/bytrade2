@@ -1,0 +1,372 @@
+В актуальной версии кода вы устранили часть прошлых проблем (добавили log_analysis и корректно вызываете AdaptiveMLStrategy.analyze_market). Однако по логам «трае 3» торговля всё ещё не запускается. Основные причины — ошибки в интерфейсе и неверное получение баланса. Ниже перечислены найденные проблемы и конкретные рекомендации по исправлению.
+
+1. Метод update_balance_info() отсутствует
+
+В классе TradingBotMainWindow после загрузки тикеров вызывается self.update_balance_info()
+GitHub
+. Этого метода в классе нет, поэтому в логе появляется:
+2025-09-23 14:55:43,918 - ERROR - Ошибка при загрузке данных тикеров: 'TradingBotMainWindow' object has no attribute 'update_balance_info'
+Из‑за этого исключения поток прерывает обновление тикеров и не доходит до торговли.
+
+Как исправить
+
+Реализуйте метод update_balance_info либо замените его на существующий вызов. Например, метод может просто обновлять баланс‑лимитер и интерфейс:
+# В классе TradingBotMainWindow
+def update_balance_info(self):
+    """
+    Пересчитывает сумму ограничителя баланса и обновляет отображение.
+    Вызывайте этот метод после изменения self.current_balance или процента лимита.
+    """
+    # если уже есть общий баланс, обновляем ограничитель
+    if hasattr(self, "current_balance") and self.current_balance:
+        # например, вычисляем total_balance из self.current_balance
+        total = 0.0
+        # поддержка формата UNIFIED (список монет) и старого формата
+        coins = self.current_balance.get("coins") or {}
+        if isinstance(coins, dict):
+            for bal in coins.values():
+                total += float(bal)
+        elif isinstance(coins, list):
+            for coin in coins:
+                total += float(coin.get("walletBalance", 0))
+        self.total_balance_usd = total
+        # обновляем ограничитель и метки
+        self.update_balance_limit_display()
+2. Неправильное извлечение available_balance в TradingWorker
+
+В TradingWorker._execute_trade доступный баланс вычисляется только если в ответе баланса есть ключ 'result' и 'list'
+GitHub
+:
+available_balance = 0.0
+if balance_resp and 'result' in balance_resp and balance_resp['result'].get('list'):
+    available_balance = float(balance_resp['result']['list'][0].get('totalAvailableBalance', 0))
+Но метод BybitClient.get_wallet_balance() возвращает словарь вида {'list': [...]} (без 'result')
+GitHub
+. Поэтому условие всегда ложно, available_balance остаётся нулевым, и размер позиции меньше минимального порога (10 USD). В результате робот игнорирует все сигналы, что подтверждают строки:
+Общий баланс в USD: 236165.1625738, доступный: 0
+Размер позиции слишком мал: $0.00 < $10.00
+Как исправить
+
+Извлекайте totalAvailableBalance и totalWalletBalance как для формата 'result', так и для формата 'list':
+# Вместо проверки только 'result'
+available_balance = 0.0
+if balance_resp:
+    if 'result' in balance_resp and balance_resp['result'].get('list'):
+        acc = balance_resp['result']['list'][0]
+        available_balance = float(acc.get('totalAvailableBalance', 0))
+    elif 'list' in balance_resp and balance_resp.get('list'):
+        acc = balance_resp['list'][0]
+        available_balance = float(acc.get('totalAvailableBalance', 0))
+
+# учтите ограничитель баланса
+if self.balance_limit_active and self.balance_limit_amount > 0:
+    available_balance = min(available_balance, self.balance_limit_amount)
+После этой правки у бота появится ненулевой доступный баланс и он сможет рассчитывать размер позиции.
+
+3. Некорректная обработка тикеров
+
+Лог содержит сообщение:
+2025-09-23 14:55:47,711 - ERROR - Неверная структура ответа API: [...]
+Это значит, что ответ get_tickers возвращается в виде списка словарей с bid1Price, ask1Price, lastPrice и т. д., а код ожидал другую структуру. При этом метод update_tickers_table пытается обращаться к полям вроде highPrice24h, volume24h
+GitHub
+, которых может не быть. Из‑за этого интерфейс не обновляет список тикеров.
+
+Как исправить
+
+Проверьте структуру, которую возвращает BybitClient.get_tickers() (список словарей). Настройте self.tickers_data в TradingBotMainWindow так, чтобы ключи соответствовали этим полям. Например:
+# при получении тикеров
+tickers = self.bybit_client.get_tickers(category='spot')
+self.tickers_data = { t['symbol']: {
+    'lastPrice': t.get('lastPrice'),
+    'highPrice24h': t.get('highPrice24h') or t.get('highPrice'),
+    'lowPrice24h': t.get('lowPrice24h') or t.get('lowPrice'),
+    'volume24h': t.get('volume24h') or t.get('volume'),
+    'turnover24h': t.get('turnover24h') or t.get('turnover'),
+    'priceChangePercent24h': float(t.get('price24hPcnt', '0'))*100
+} for t in tickers }
+# затем вызовите update_tickers_table()
+Если структура API изменилась, можно посмотреть документацию Bybit V5 (в папке info) и подстроиться под новые ключи.
+
+4. Ошибки в расчёте USD‑стоимости монет
+
+В логах много предупреждений «Ошибка расчета USD для BTC/USDT», из‑за того, что в данных баланса нет поля availableToWithdraw для UNIFIED‑аккаунта. В методе update_balance вы используете availableToWithdraw, который часто пустой
+GitHub
+. Это поле на тестовой сети может не возвращаться. Временно можно пропускать этот расчёт или считать доступным балансом walletBalance.
+
+5. ML‑стратегия и исторические данные
+
+В новой версии кода вы ещё не реализовали асинхронную загрузку длинных исторических данных. В TradingWorker по‑прежнему запрашивается только 200 свечей (get_kline с limit=200), и при ошибке интервала API выдаёт Invalid period!, после чего вызывается резервный интервал
+raw.githubusercontent.com
+. Этого недостаточно для обучения нейросети — ML‑стратегия продолжает работать на простых правилах. Чтобы модель действительно обучалась:
+
+Соберите большие исторические ряды: реализуйте класс, который через параметр start/end будет асинхронно загружать тысячи свечей с помощью aiohttp. Пример кода асинхронного загрузчика я приводил в предыдущем ответе.
+
+Перед обучением подготовьте набор признаков и меток и вызовите AdaptiveMLStrategy.train_model(symbol, features, labels) до запуска торгового цикла.
+
+Оптимизируйте пороги (confidence_threshold) и правила, чтобы робот не игнорировал все сигналы до тех пор, пока не обучится.
+6. Поддержка API Bybit V5 для тикеров
+
+Bybit периодически меняет структуру ответов. Для тестовой сети v5 API может возвращать сокращённый набор полей. Проверьте документацию (она у вас лежит в папке info) и убедитесь, что параметры category, interval, limit и поля результата соответствуют обновлённой спецификации. Если 1h период не поддерживается, используйте "60" или "15" и увеличивайте limit.
+
+7. Итоговые действия
+
+Создайте метод update_balance_info() (или уберите его вызов) в TradingBotMainWindow, чтобы убрать исключение и корректно обновлять лимит баланса.
+
+Исправьте извлечение available_balance в TradingWorker._execute_trade — учитывайте, что get_wallet_balance возвращает {"list": [...]}, а не {"result": {...}}.
+
+Приспособьте обработку тикеров к реальной структуре ответа API. Проверьте, какие поля есть в списке tickers, и используйте их для таблицы.
+
+Обратите внимание на расчёт USD‑баланса — не используйте availableToWithdraw там, где его нет.
+
+Для нейросети: реализуйте асинхронную загрузку большого объёма исторических данных (несколько тысяч свечей), заранее обучите модель, и только потом запускайте торговлю.
+
+Проверьте документацию в info по API Bybit V5, чтобы привести параметры запросов в соответствие с актуальной версией API.
+
+После этих исправлений поток торговли сможет корректно получать баланс и тикеры, анализировать рынок и, при наличии сигналов, размещать ордера.
+
+ОТДЕЛЬНАЯ ИНСТРУКЦИЯ ЧТО НУЖНО СДЕЛАТЬ:
+Ниже описаны рекомендации и примеры кода, которые помогут реализовать обучение нейросети даже на небольшом количестве данных, визуализировать этот процесс в отдельном приложении и расширить UI для ручных сделок.
+
+1. Обучение нейросети при малом количестве свечей
+
+Сейчас AdaptiveMLStrategy отказывается обучать модель, если доступно меньше feature_window (50) свечей: analyze_market возвращает {'signal': None, 'confidence': 0.0}. Чтобы модель училась даже на 200 свечах:
+
+Уменьшите минимальный размер обучающего окна. В конфигурации ml_config установите feature_window равным, например, 20. Тогда даже 200 свечей дадут 180 обучающих примеров.
+ml_config = {
+    'feature_window': 20,
+    'confidence_threshold': 0.65,
+    'use_technical_indicators': True,
+    'use_market_regime': True
+}
+Добавьте понижение доверия при малом объёме данных. В AdaptiveMLStrategy.analyze_market можно оценивать количество доступных свечей и понижать confidence при дефиците данных:
+# после расчёта confidence
+data_len = len(market_data['klines'])
+if data_len < 50:
+    # уменьшаем доверие пропорционально нехватке данных
+    confidence *= data_len / 50.0
+analysis['confidence'] = confidence
+Тогда при 200 свечах и feature_window=20 модель будет тренироваться, но доверие по конкретному символу будет ниже.
+
+2. Создание отдельного приложения для визуализации обучения
+
+Вам нужна отдельная GUI‑программа, которая показывает, как нейросеть обучается, какие тикеры используются и какой прогресс. Это приложение должно работать параллельно с run_ticker_viewer.py и trading_bot_main.py, хранить состояние обучения и показывать его после перезапуска.
+
+Общие требования
+
+Модули: можно использовать PySide6 или PyQt6 для GUI, так как основной интерфейс на них уже построен.
+
+Хранилище прогресса: используйте SQLite (та же БД, что и в основном боте) либо сериализацию (pickle) для сохранения обученных моделей и метрик.
+
+Взаимодействие с основной программой:
+
+Обе программы должны использовать общие файлы для моделей (adaptive_ml_models.pkl, adaptive_ml_scalers.pkl, adaptive_ml_performance.json).
+
+Главное приложение загружает эти файлы через AdaptiveMLStrategy.load_models(), а визуализатор обновляет их по мере обучения.
+
+Асинхронное обучение: в визуализаторе запускать обучение в отдельном потоке, чтобы не блокировать интерфейс, и регулярно обновлять прогресс на графике или в таблице.
+
+Пример структуры trainer_gui.py
+# trainer_gui.py
+import sys
+import json
+import threading
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QWidget,
+    QPushButton, QTableWidget, QTableWidgetItem, QLabel, QProgressBar
+)
+from PySide6.QtCore import QTimer
+
+from src.strategies.adaptive_ml import AdaptiveMLStrategy
+from src.api.bybit_client import BybitClient
+
+class TrainingMonitor(QMainWindow):
+    def __init__(self, api_key, api_secret, testnet=True):
+        super().__init__()
+        self.setWindowTitle("ML Training Monitor")
+        self.setGeometry(100, 100, 800, 600)
+
+        # инициализация API клиента и стратегии
+        self.bybit_client = BybitClient(api_key, api_secret, testnet)
+        ml_config = {'feature_window': 20, 'confidence_threshold': 0.65}
+        self.ml_strategy = AdaptiveMLStrategy(
+            name="adaptive_ml",
+            config=ml_config,
+            api_client=self.bybit_client,
+            db_manager=None,  # можно передать db_manager, если нужен лог в БД
+            config_manager=None,
+            ticker_loader=None
+        )
+        self.ml_strategy.load_models()  # загрузка ранее сохранённых моделей
+
+        # UI элементы
+        central_widget = QWidget()
+        layout = QVBoxLayout()
+        self.status_label = QLabel("Нажмите «Обучить модели», чтобы начать")
+        self.progress_bar = QProgressBar()
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Тикер", "Статус", "Точность"])
+
+        self.train_button = QPushButton("Обучить модели")
+        self.train_button.clicked.connect(self.start_training)
+
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.table)
+        layout.addWidget(self.train_button)
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
+
+        # таймер для обновления прогресса
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.refresh_table)
+        self.update_timer.start(2000)  # каждые 2 секунды
+
+        self.training_thread = None
+
+    def start_training(self):
+        if self.training_thread and self.training_thread.is_alive():
+            return  # уже идёт обучение
+        self.training_thread = threading.Thread(target=self.train_models)
+        self.training_thread.start()
+
+    def train_models(self):
+        # пример: загружаем исторические данные для выбранных тикеров
+        tickers = ["BTCUSDT", "ETHUSDT"]  # можно выбрать все доступные
+        for symbol in tickers:
+            # загружаем, например, по 200 свечей, преобразуем данные в признаки/метки
+            klines = self.bybit_client.get_kline(category="spot", symbol=symbol, interval="60", limit=200)
+            prices = [float(k['close']) for k in klines]
+            # генерируем признаки для каждого окна
+            features, labels = [], []
+            window = self.ml_strategy.feature_window
+            for i in range(window, len(prices)-1):
+                f = self.ml_strategy.extract_features(klines[i-window:i])
+                if f:
+                    features.append(f)
+                    change = (prices[i+1] - prices[i]) / prices[i]
+                    labels.append(1 if change > 0.002 else -1 if change < -0.002 else 0)
+            if features and labels:
+                self.ml_strategy.train_model(symbol, features, labels)
+                # сохраняем модель, чтобы она загружалась в основном приложении
+                self.ml_strategy.save_models()
+            # обновляем статус
+            self.status_label.setText(f"Обучение {symbol} завершено")
+
+        self.status_label.setText("Обучение завершено")
+
+    def refresh_table(self):
+        # обновляем таблицу текущими метриками self.ml_strategy.performance
+        perf = self.ml_strategy.performance
+        self.table.setRowCount(len(perf))
+        for i, (symbol, stats) in enumerate(perf.items()):
+            self.table.setItem(i, 0, QTableWidgetItem(symbol))
+            self.table.setItem(i, 1, QTableWidgetItem("Trained"))
+            acc = stats.get("accuracy", 0)
+            self.table.setItem(i, 2, QTableWidgetItem(f"{acc:.2f}"))
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    api_key = "..."       # подставьте ключи
+    api_secret = "..."
+    monitor = TrainingMonitor(api_key, api_secret, testnet=True)
+    monitor.show()
+    sys.exit(app.exec())
+Как интегрировать с основным ботом
+
+Запускайте trainer_gui.py отдельно, параллельно с run_ticker_viewer.py и trading_bot_main.py.
+
+В AdaptiveMLStrategy основной программы вызовите load_models() при инициализации, чтобы использовать модели, натренированные в визуализаторе.
+
+Кнопка «Обучить модели» в trainer_gui.py запускает обучение на доступных данных и сохраняет файлы моделей (pkl и json). Эти файлы должны находиться в общей папке проекта (/data), чтобы обе программы имели доступ.
+
+3. Сохранение прогресса обучения
+
+В примере выше используется метод self.ml_strategy.save_models(), который в проекте уже реализован и сохраняет модели, скейлеры и статистику в файлы adaptive_ml_models.pkl, adaptive_ml_scalers.pkl, adaptive_ml_performance.json. Эти файлы загружаются при старте стратегии:
+self.ml_strategy.load_models()
+Благодаря этому после перезапуска основная программа будет использовать уже обученные модели, а визуализатор — восстанавливать прогресс и продолжать обучение.
+
+4. Кнопки ручной покупки/продажи в интерфейсе
+
+Вы хотите добавить на вкладку «Обзор» две кнопки:
+
+Купить самый дешёвый тикер — выбрать тикер с минимальной текущей ценой и купить его на фиксированную сумму (или на весь доступный лимит).
+
+Продать самый дешёвый тикер из портфеля — выбрать актив с минимальной стоимостью в текущем портфеле и продать (весь или частично).
+
+Пример кода для TradingBotMainWindow
+
+Добавьте две кнопки в методе, где создаются элементы вкладки «Обзор»:
+# внутри create_overview_tab() или аналогичного
+self.buy_lowest_btn = QPushButton("Купить самый дешёвый")
+self.sell_lowest_btn = QPushButton("Продать самый дешёвый")
+
+self.buy_lowest_btn.clicked.connect(self.buy_lowest_ticker)
+self.sell_lowest_btn.clicked.connect(self.sell_lowest_ticker)
+
+# добавьте кнопки в layout вкладки обзора
+overview_layout.addWidget(self.buy_lowest_btn)
+overview_layout.addWidget(self.sell_lowest_btn)
+Реализуйте методы для обработки кликов:
+def buy_lowest_ticker(self):
+    # определяем самый дешёвый тикер по данным tickers_data
+    if not self.tickers_data:
+        self.add_log_message("❌ Нет данных по тикерам")
+        return
+    lowest_symbol = min(self.tickers_data.items(), key=lambda x: float(x[1].get('lastPrice', 0)))[0]
+    # вызываем метод TradingWorker для размещения ордера
+    analysis = {'signal': 'BUY', 'confidence': 1.0}  # ручная покупка
+    # блокируем возможность покупки, если торговля выключена
+    if self.trading_worker:
+        self.trading_worker.enable_trading(True)
+        self.trading_worker._execute_trade(lowest_symbol, analysis, session_id="manual_buy")
+
+def sell_lowest_ticker(self):
+    # определяем самый дешёвый актив в портфеле (по USDT эквиваленту или по цене)
+    if not self.current_balance or 'coins' not in self.current_balance:
+        self.add_log_message("❌ Нет данных о портфеле")
+        return
+    # ищем монету с минимальным usdValue
+    coins = self.current_balance.get('coins', [])
+    if isinstance(coins, list):
+        non_stable = [c for c in coins if float(c.get('usdValue', 0)) > 0]
+        if not non_stable:
+            self.add_log_message("❌ Нет активов для продажи")
+            return
+        lowest_coin = min(non_stable, key=lambda c: float(c.get('usdValue', 0)))
+        symbol = lowest_coin['coin'] + "USDT"
+        analysis = {'signal': 'SELL', 'confidence': 1.0}
+        if self.trading_worker:
+            self.trading_worker.enable_trading(True)
+            self.trading_worker._execute_trade(symbol, analysis, session_id="manual_sell")
+При ручной сделке не требуется расчёт ML‑анализа, поэтому confidence можно установить в 1.0. Тем не менее, для безопасности вы можете проверять наличие активов, доступный баланс и минимальный размер позиции, как это делается в _execute_trade.
+
+5. Что ещё учесть
+
+Валидация рисков: убедитесь, что кнопки покупки/продажи не обходят дневные лимиты и ограничитель баланса.
+
+Параллельная работа: визуализатор trainer_gui.py должен запускаться отдельно, чтобы не мешать главному окну. Оба приложения используют одни и те же файлы моделей; конфликтов не возникнет, если вы аккуратно сохраняете и загружаете модели.
+
+Асинхронная подкачка данных: если вы хотите обучать модели на большем количестве свечей, но API ограничивает limit=1000, используйте асинхронный загрузчик (пример в предыдущих ответах) и передавайте полученные данные в обучающий поток.
+
+Следуя этим шагам, вы сможете обучать нейросеть даже на небольших выборках, наблюдать за ходом обучения в отдельном приложении, сохранять прогресс, использовать обученные модели в основном боте и выполнять ручные сделки через новые кнопки.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,98 @@
+[
+  {
+    "symbol": "BTCUSDT",
+    "interval": "4h",
+    "count": 500,
+    "status": "success"
+  },
+  {
+    "symbol": "ETHUSDT",
+    "interval": "4h",
+    "count": 500,
+    "status": "success"
+  },
+  {
+    "symbol": "ADAUSDT",
+    "interval": "4h",
+    "count": 500,
+    "status": "success"
+  },
+  {
+    "symbol": "SOLUSDT",
+    "interval": "4h",
+    "count": 379,
+    "status": "success"
+  },
+  {
+    "symbol": "DOTUSDT",
+    "interval": "4h",
+    "count": 500,
+    "status": "success"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "interval": "4h",
+    "count": 500,
+    "status": "success"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "interval": "240",
+    "count": 500,
+    "status": "success"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "interval": "1d",
+    "count": 500,
+    "status": "success"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "interval": "D",
+    "count": 500,
+    "status": "success"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "interval": "4h",
+    "limit": 10,
+    "count": 10,
+    "status": "success"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "interval": "4h",
+    "limit": 50,
+    "count": 50,
+    "status": "success"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "interval": "4h",
+    "limit": 100,
+    "count": 100,
+    "status": "success"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "interval": "4h",
+    "limit": 200,
+    "count": 200,
+    "status": "success"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "interval": "4h",
+    "limit": 500,
+    "count": 500,
+    "status": "success"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "interval": "4h",
+    "limit": 1000,
+    "count": 1000,
+    "status": "success"
+  }
+]

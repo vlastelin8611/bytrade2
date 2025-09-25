@@ -1,0 +1,242 @@
+
+BYTRADE / SIMPLE VERSION — ПОЛНЫЙ АУДИТ И ПЛАН ПОПРАВОК
+Дата: 2025-09-09 10:54:22
+
+Что я просмотрел (по репо: vlastelin8611/bytrade):
+- simple_version/trading_bot_main.py — логика вкладок, апдейты баланса/позиций, сигналы/слоты.
+- simple_version/src/api/bybit_client.py — вызовы /v5/... (wallet-balance, position/list, tickers и т.д.).
+- simple_version/src/settings/config.py — базовые URL и (внимание!) ключи API внутри кода.
+- simple_version/keys.txt — обнаружены реальные ключи/секреты (см. раздел «Безопасность»).
+- info/ — инструкции по Postman и примеры запросов.
+- simple_version/ (остальные файлы — по именам/структуре вкладок).
+
+Ограничения доступа:
+- Файл “simple_version/список нужных фич.txt” с GitHub через коннектор не раскрылся (ошибка открытия).
+  Пожалуйста, продублируйте его содержимое в чат. Ниже — общий разбор и проверка типовых требований.
+
+======================================================================
+A. ПРОБЛЕМА «ОБЗОР → АКТИВЫ»: ДВЕ СТРОКИ БЕЗ ТЕКСТА
+======================================================================
+Симптом: на вкладке «Обзор» блок «Активы» рисует 2 строки, но они пустые (текст не виден).
+Вероятные причины (по коду и стандартному ответу API):
+1) Структура UNIFIED баланса «сырая», UI ожидает плоский словарь.
+   По API: GET /v5/account/wallet-balance?accountType=UNIFIED
+   Возвращает result.list[0] с полями: totalWalletBalance, totalAvailableBalance и массив coin[ ... { coin, walletBalance, ... } ... ]
+   Если UI напрямую пытается показать несуществующие ключи (например, 'availableBalance' вместо 'totalAvailableBalance') — попадут «пустые» значения.
+2) Таблица инициализируется с двумя строками заранее, а данные не проставляются (нет setItem/setText) или используются не те ключи.
+3) Стиль/верстка: цвет текста совпадает с фоном, либо столбцы с нулевой шириной.
+
+Что сделать (без переделки всей архитектуры):
+- На стороне Bybit-клиента вернуть «плоскую» структуру баланса, удобную для UI.
+- В UI после апдейта баланса заполнять таблицу/лейблы конкретными строками (см. код ниже).
+- Включить адекватные режимы растягивания столбцов (QHeaderView).
+- Временный принт перед рендером, чтобы видеть реальные данные.
+
+Готовые функции (вставить в simple_version/src/api/bybit_client.py):
+-------------------------------------------------------------------
+from decimal import Decimal
+
+def _flatten_unified_balance(resp: dict) -> dict:
+    """UNIFIED → удобный словарь:
+       {
+         'total_wallet_usd': Decimal,
+         'total_available_usd': Decimal,
+         'coins': { 'USDT': Decimal, 'BTC': Decimal, ... }
+       }
+    """
+    out = {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+    try:
+        acc = resp['result']['list'][0]
+        out['total_wallet_usd'] = Decimal(str(acc.get('totalWalletBalance', '0')))
+        out['total_available_usd'] = Decimal(str(acc.get('totalAvailableBalance', '0')))
+        for c in acc.get('coin', []):
+            coin = c.get('coin')
+            bal  = Decimal(str(c.get('walletBalance', '0')))
+            if coin:
+                out['coins'][coin] = bal
+    except Exception:
+        pass
+    return out
+
+def _flatten_fund_balance(resp: dict) -> dict:
+    """FUND → {'coins': {'USDT': Decimal(...), 'BTC': Decimal(...), ...}}"""
+    out = {'coins': {}, 'accountType': 'FUND'}
+    try:
+        for c in resp['result'].get('balance', []):
+            coin = c.get('coin')
+            bal  = Decimal(str(c.get('walletBalance', '0')))
+            if coin:
+                out['coins'][coin] = bal
+    except Exception:
+        pass
+    return out
+
+# Внутри класса BybitClient добавьте методы-обёртки:
+def get_unified_balance_flat(self, coins: list[str] | None = None) -> dict:
+    params = { 'accountType': 'UNIFIED' }
+    if coins:
+        params['coin'] = ','.join(coins)
+    raw = self._request('GET', '/v5/account/wallet-balance', params=params, signed=True)
+    return _flatten_unified_balance(raw)
+
+def get_fund_balance_flat(self, coins: list[str] | None = None) -> dict:
+    params = { 'accountType': 'FUND' }
+    if coins:
+        params['coin'] = ','.join(coins)
+    raw = self._request('GET', '/v5/asset/transfer/query-account-coins-balance', params=params, signed=True)
+    return _flatten_fund_balance(raw)
+
+def usd_to_btc(self, usd: Decimal) -> Decimal:
+    tick = self._request('GET', '/v5/market/tickers', params={'category': 'spot', 'symbol': 'BTCUSDT'}, signed=False)
+    price = Decimal(str(tick['result']['list'][0]['lastPrice']))
+    return (usd / price) if price > 0 else Decimal('0')
+
+UI-рендер «Активов» (пример для QTableWidget; вставлять в обработчик сигнала баланса):
+-------------------------------------------------------------------------------------
+flat = api.get_unified_balance_flat(coins=['USDT','BTC'])
+print('DEBUG flat unified:', flat)  # временно
+table.setColumnCount(3)
+table.setHorizontalHeaderLabels(['Счёт/Монета','Кол-во','≈ USD'])
+rows = []
+rows.append(('UNIFIED / итого', '', f"{flat['total_wallet_usd']:.2f}"))
+for coin, qty in flat['coins'].items():
+    rows.append((f'UNIFIED / {coin}', f"{qty:.8f}", '—'))
+table.setRowCount(len(rows))
+for i, (c0, c1, c2) in enumerate(rows):
+    table.setItem(i, 0, QTableWidgetItem(c0))
+    table.setItem(i, 1, QTableWidgetItem(c1))
+    table.setItem(i, 2, QTableWidgetItem(c2))
+header = table.horizontalHeader()
+header.setSectionResizeMode(0, QHeaderView.Stretch)
+header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+
+Если вместо таблицы — QLabel, то:
+balance_label.setText(f"Баланс (UNIFIED): {flat['total_wallet_usd']:.2f} USD")
+available_label.setText(f"Доступно: {flat['total_available_usd']:.2f} USD")
+
+======================================================================
+B. ПРОБЛЕМА «ПОЗИЦИИ»: НЕТ ДАННЫХ И НЕТ АВТО-ОБНОВЛЕНИЯ
+======================================================================
+Важно различать:
+- SPOT: «позиций» нет; есть активы (баланс монет) и ордера/трейды.
+- Деривативы (linear/inverse/options): «позиции» есть → /v5/position/list.
+
+Рекомендация по UX вкладки «Позиции»:
+- Под-вкладки:
+  [Открытые позиции (деривативы)] — /v5/position/list (category из выпадающего списка: linear/inverse/option)
+  [Спот-инструменты] — /v5/market/instruments-info?category=spot (+ тикеры для цен/объёмов)
+
+Асинхронность (без блокировки GUI) — QThread воркер:
+----------------------------------------------------
+class PositionsWorker(QThread):
+    updated = pyqtSignal(list)
+    def __init__(self, client, mode='linear', interval_ms=2000):
+        super().__init__()
+        self.client = client
+        self.mode = mode
+        self.interval_ms = interval_ms
+        self._stop = False
+    def run(self):
+        while not self._stop:
+            try:
+                if self.mode in ('linear','inverse','option'):
+                    data = self.client.get_positions(category=self.mode)
+                else:
+                    data = self.client.get_spot_instruments()
+                self.updated.emit(data or [])
+            except Exception as e:
+                print('positions worker:', e)
+            self.msleep(self.interval_ms)
+    def stop(self): self._stop = True
+
+# Слот рендера:
+def _render_positions_table(self, items: list[dict]):
+    self.table.setRowCount(len(items))
+    for i, p in enumerate(items):
+        self.table.setItem(i, 0, QTableWidgetItem(p.get('symbol','')))
+        self.table.setItem(i, 1, QTableWidgetItem(p.get('side','')))
+        self.table.setItem(i, 2, QTableWidgetItem(str(p.get('size',''))))
+        self.table.setItem(i, 3, QTableWidgetItem(str(p.get('avgPrice',''))))
+        self.table.setItem(i, 4, QTableWidgetItem(str(p.get('unrealisedPnl',''))))
+
+======================================================================
+C. «КОЛ-ВО BTC < 1» — КАК ПРАВИЛЬНО СЧИТАТЬ
+======================================================================
+btc_actual = flat['coins'].get('BTC', Decimal('0'))   # фактическое кол-во BTC
+btc_equiv  = api.usd_to_btc(flat['total_wallet_usd']) # эквивалент от USD
+label.setText(f"BTC: {btc_actual:.8f} (эквив: {btc_equiv:.8f})")
+
+======================================================================
+D. КЕШ/ЛОГ В SQLite
+======================================================================
+CREATE TABLE IF NOT EXISTS api_cache (
+  cache_key TEXT PRIMARY KEY,
+  payload   TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+from time import time
+import json, sqlite3
+
+def cache_get(conn, key: str) -> dict | None:
+    cur = conn.execute('SELECT payload, expires_at FROM api_cache WHERE cache_key=?', (key,))
+    row = cur.fetchone()
+    if not row: return None
+    payload, expires = row
+    if expires < int(time()):
+        conn.execute('DELETE FROM api_cache WHERE cache_key=?', (key,))
+        conn.commit()
+        return None
+    return json.loads(payload)
+
+def cache_put(conn, key: str, obj: dict, ttl_sec: int):
+    conn.execute('REPLACE INTO api_cache(cache_key,payload,expires_at) VALUES(?,?,?)',
+                 (key, json.dumps(obj), int(time()) + ttl_sec))
+    conn.commit()
+
+======================================================================
+E. ПРОВЕРКА «СПИСОК НУЖНЫХ ФИЧ» (ОБЩЕЕ)
+======================================================================
+- Реальные данные / переключатель testnet/prod: держите это в config.py и в UI-переключателе.
+- Асинхронность: воркеры для позиций и инструментов; таймер в UI только триггерит воркера.
+- Разбивка модулей: api/ui/storage(utils/cache).
+- Вкладки и графики: для свечей используйте /v5/market/kline и pyqtgraph.
+
+======================================================================
+F. БЕЗОПАСНОСТЬ — СРОЧНО
+======================================================================
+- Из репозитория удалить ключи (simple_version/src/settings/config.py, simple_version/keys.txt).
+- Перевыпустить ключи на Bybit (старые скомпрометированы историей Git).
+- Добавить .gitignore и хранить ключи в окружении/Secret Manager.
+- Читать ключи из os.getenv(...) в рантайме.
+
+======================================================================
+G. КОНКРЕТНЫЕ ШАГИ ДЛЯ ВАС
+======================================================================
+1) В bybit_client.py вставьте flatten-функции и методы get_unified_balance_flat / get_fund_balance_flat / usd_to_btc.
+2) В «Обзор/Активы» используйте flat-данные + setItem/setText, как в примере.
+3) «Позиции»: решите режимы (деривативы/спот-инструменты), подключите PositionsWorker.
+4) Введите SQLite-кеш для instruments-info и частичных вызовов.
+5) Уберите ключи из кода, перевыпустите их, считывайте из окружения.
+6) Пришлите содержимое «список нужных фич.txt», чтобы я отметил соответствие каждого пункта и составил чек-лист задач.
+
+теперь коротко:
+Коротко по твоим вопросам (детали и код — в файле):
+
+Вкладка “Обзор → Активы”: две строки пустые, потому что UI, судя по всему, ждёт старые поля (availableBalance), а в UNIFIED они другие (totalAvailableBalance + массив coin). Я добавил “уплощалку” баланса и пример, как заполнять таблицу/лейблы так, чтобы текст точно появился, и чтобы столбцы автоматически растягивались.
+
+“Биткоинов меньше одного”: если у тебя на UNIFIED нет фактического BTC, но есть USDT, а в UI показывается «эквивалент BTC», его надо считать через цену BTCUSDT. В файле есть готовая функция usd_to_btc(...) и пример рендера: фактический BTC + эквивалент.
+
+Вкладка “Позиции”: у спота “позиций” нет (это деривативная сущность). Я предложил разнести:
+
+Открытые позиции деривативов → /v5/position/list (category: linear|inverse|option),
+
+Список торгуемых спот-инструментов → /v5/market/instruments-info (+ котировки /v5/market/tickers).
+Есть готовый воркер на QThread, который обновляет данные асинхронно (без лагов UI), и готовый слот рендера таблицы.
+
+Кеш/лог в БД: добавил готовый небольшой слой на SQLite для кеширования “тяжёлых”/частых ответов (инструменты, балансы), чтобы не дёргать API «100 раз в секунду».
+
+Безопасность: в репозитории лежат ключи (simple_version/src/settings/config.py, simple_version/keys.txt). Их нужно удалить из кода, перевыпустить на Bybit, добавить .gitignore, и читать из переменных окружения. В файле — как именно это сделать.
+
+“Список нужных фич”: коннектор не дал открыть файл по ссылке. Пришли его содержимое текстом, и я отмечу соответствие пункт-в-пункт и распишу точные задачи (что готово/чего нет/как доделать).
