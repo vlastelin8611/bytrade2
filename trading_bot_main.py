@@ -407,48 +407,73 @@ class TradingWorker(QThread):
             return None
     
     def _update_positions(self, session_id: str) -> List[dict]:
-        """Обновление информации о позициях (для спотовой торговли - открытые ордера)"""
+        """Обновление информации о позициях (спотовые активы из баланса)"""
         try:
             start_time = time.time()
             
-            # Для спотовой торговли получаем открытые ордера вместо позиций
+            # Получаем спотовые позиции из баланса (как во вкладке Обзор)
             try:
-                # Получаем открытые ордера через API
-                orders_response = self.bybit_client.get_open_orders(category="spot")
+                # Получаем актуальный баланс
+                balance_info = self.bybit_client.get_unified_balance_flat()
                 
-                # Проверяем, что получили корректный ответ
-                if orders_response and 'list' in orders_response:
-                    orders_list = orders_response['list']
+                if balance_info and balance_info.get('coins'):
+                    # Получаем спотовые тикеры для цен
+                    spot_tickers = {}
+                    try:
+                        tickers_data = self.bybit_client.get_tickers(category="spot")
+                        if tickers_data and isinstance(tickers_data, list):
+                            for ticker in tickers_data:
+                                if 'symbol' in ticker and 'lastPrice' in ticker:
+                                    spot_tickers[ticker['symbol']] = ticker
+                    except Exception as e:
+                        self.logger.warning(f"Ошибка получения спотовых тикеров: {e}")
                     
-                    # Преобразуем ордера в формат, совместимый с интерфейсом позиций
+                    # Создаем спотовые позиции из баланса
                     spot_positions = []
-                    for order in orders_list:
-                        # Создаем объект, имитирующий позицию для спотового ордера
-                        spot_position = {
-                            'symbol': order.get('symbol'),
-                            'category': 'spot',
-                            'side': order.get('side'),
-                            'size': order.get('qty'),
-                            'avgPrice': order.get('price'),
-                            'positionValue': float(order.get('price', 0)) * float(order.get('qty', 0)),
-                            'orderId': order.get('orderId'),
-                            'orderType': order.get('orderType'),
-                            'orderStatus': order.get('orderStatus'),
-                            'createdTime': order.get('createdTime'),
-                            'updatedTime': order.get('updatedTime')
-                        }
-                        spot_positions.append(spot_position)
+                    for coin_item in balance_info['coins']:
+                        coin_name = coin_item.get('coin', '')
+                        balance = float(coin_item.get('walletBalance', '0'))
+                        usd_value = float(coin_item.get('usdValue', '0'))
+                        
+                        # Включаем все активы с положительным балансом (включая USDT для полноты картины)
+                        if balance > 0:
+                            symbol = f"{coin_name}USDT" if coin_name != 'USDT' else 'USDT'
+                            
+                            # Получаем текущую цену из тикеров
+                            price = 0
+                            if symbol in spot_tickers:
+                                price = float(spot_tickers[symbol].get('lastPrice', 0))
+                            elif coin_name == 'USDT':
+                                price = 1.0  # USDT всегда $1
+                            
+                            # Рассчитываем стоимость позиции
+                            position_value = balance * price if price > 0 else usd_value
+                            
+                            # Создаем объект позиции в формате для таблицы позиций
+                            spot_position = {
+                                'symbol': symbol,
+                                'category': 'spot',
+                                'side': 'Buy',  # Спотовые позиции всегда Buy
+                                'size': str(balance),
+                                'positionValue': str(position_value),
+                                'avgPrice': str(price) if price > 0 else '0',
+                                'unrealisedPnl': '0',  # Для спотовых позиций PnL не рассчитывается
+                                'markPrice': str(price) if price > 0 else '0',
+                                'coin': coin_name,
+                                'usdValue': str(usd_value)
+                            }
+                            spot_positions.append(spot_position)
                     
-                    self.logger.info(f"Получено {len(spot_positions)} спотовых ордеров")
+                    self.logger.info(f"Получено {len(spot_positions)} спотовых позиций из баланса")
                 else:
                     spot_positions = []
-                    self.logger.warning("Получен пустой или некорректный ответ при запросе спотовых ордеров")
+                    self.logger.warning("Не удалось получить данные о балансе для спотовых позиций")
             except Exception as e:
-                self.logger.warning(f"Ошибка получения спотовых ордеров: {e}")
+                self.logger.warning(f"Ошибка получения спотовых позиций из баланса: {e}")
                 spot_positions = []
             
             exec_time = (time.time() - start_time) * 1000
-            self.logger.info(f"Найдено {len(spot_positions)} активных спотовых ордеров")
+            self.logger.info(f"Найдено {len(spot_positions)} спотовых позиций")
             
             # Всегда отправляем список позиций, даже если он пустой
             self.positions_updated.emit(spot_positions)
@@ -457,27 +482,20 @@ class TradingWorker(QThread):
             if self.db_manager:
                 try:
                     self.db_manager.save_positions(spot_positions)
-                    self.log_message.emit(f"Сохранено {len(spot_positions)} спотовых ордеров в базу данных")
+                    self.log_message.emit(f"Сохранено {len(spot_positions)} спотовых позиций в базу данных")
                 except Exception as db_err:
-                    self.logger.error(f"Ошибка сохранения спотовых ордеров в БД: {db_err}")
-            
-            # self.db_manager.log_entry({
-            #     'level': 'DEBUG',
-            #     'logger_name': 'API_POSITIONS',
-            #     'message': f'Spot orders updated: {len(spot_positions)} active orders',
-            #     'session_id': session_id
-            # }) # Временно закомментировано - блокирует выполнение
+                    self.logger.error(f"Ошибка сохранения спотовых позиций в БД: {db_err}")
             
             return spot_positions
         except Exception as e:
-            self.logger.error(f"Ошибка обновления спотовых ордеров: {e}")
+            self.logger.error(f"Ошибка обновления спотовых позиций: {e}")
             self.positions_updated.emit([])  # Отправляем пустой список в случае ошибки
             
             # Сохраняем пустой список позиций в базу данных
             if self.db_manager:
                 try:
                     self.db_manager.save_positions([])
-                    self.log_message.emit("Нет активных спотовых ордеров, обновлена БД")
+                    self.log_message.emit("Нет спотовых позиций, обновлена БД")
                 except Exception as db_err:
                     self.logger.error(f"Ошибка обновления пустых спотовых ордеров в БД: {db_err}")
             
@@ -843,7 +861,7 @@ class TradingWorker(QThread):
             return False
     
     def _execute_trade(self, symbol: str, analysis: dict, session_id: str) -> Optional[dict]:
-        """Выполнение торговой операции"""
+        """Выполнение торговой операции (всегда используя USDT баланс)"""
         try:
             start_time = time.time()
             
@@ -862,50 +880,71 @@ class TradingWorker(QThread):
                 position_size = custom_qty
                 self.logger.info(f"Используется кастомное количество: {position_size}")
             else:
-                # Стандартный расчет размера позиции
+                # Стандартный расчет размера позиции на основе USDT баланса
                 balance_resp = self.bybit_client.get_wallet_balance()
                 if not balance_resp:
                     return None
                 
-                # Правильное получение доступного баланса из вложенной структуры
-                available_balance = 0.0
+                # Получаем USDT баланс
+                usdt_balance = 0.0
                 if balance_resp:
                     # Проверяем оба формата ответа: с 'result' и без него
                     if 'result' in balance_resp and balance_resp['result'].get('list'):
-                        # Формат с 'result': {'result': {'list': [...]}}
-                        available_balance = float(balance_resp['result']['list'][0].get('totalAvailableBalance', 0))
+                        coins = balance_resp['result']['list'][0].get('coin', [])
                     elif 'list' in balance_resp and balance_resp['list']:
-                        # Формат без 'result': {'list': [...]}
-                        available_balance = float(balance_resp['list'][0].get('totalAvailableBalance', 0))
+                        coins = balance_resp['list'][0].get('coin', [])
                     else:
-                        self.logger.warning(f"Неожиданный формат ответа баланса: {balance_resp}")
-                        available_balance = 0.0
+                        coins = []
+                    
+                    # Ищем USDT баланс
+                    for coin in coins:
+                        if coin.get('coin') == 'USDT':
+                            usdt_balance = float(coin.get('walletBalance', 0))
+                            break
                 
                 # Если активен ограничитель баланса, используем его вместо полного баланса
                 if hasattr(self, 'balance_limit_active') and hasattr(self, 'balance_limit_amount'):
                     if self.balance_limit_active and self.balance_limit_amount > 0:
-                        available_balance = min(available_balance, self.balance_limit_amount)
+                        usdt_balance = min(usdt_balance, self.balance_limit_amount)
                 
-                # Размер позиции зависит от уверенности (1-3% от баланса)
+                # Размер позиции зависит от уверенности (1-3% от USDT баланса)
                 position_percentage = 0.01 + (confidence - 0.65) * 0.02  # 1-3%
-                position_size = available_balance * position_percentage
+                position_size_usdt = usdt_balance * position_percentage
                 
-                # Проверка минимального размера
-                if position_size < 10:
-                    self.logger.info(f"Размер позиции слишком мал: ${position_size:.2f} < $10.00")
+                # Проверка минимального размера в USDT
+                if position_size_usdt < 10:
+                    self.logger.info(f"Размер позиции слишком мал: ${position_size_usdt:.2f} < $10.00")
                     return None
+                
+                # Для покупки используем размер в USDT, для продажи - в базовой валюте
+                if signal == 'BUY':
+                    # При покупке указываем сумму в USDT
+                    position_size = str(position_size_usdt)
+                else:
+                    # При продаже нужно указать количество базовой валюты
+                    # Это будет обработано отдельно в методе продажи
+                    position_size = str(position_size_usdt)
             
             # Размещение ордера
             side = 'Buy' if signal == 'BUY' else 'Sell'
             
-            # Добавляем обязательный параметр category='spot'
-            order_result = self.bybit_client.place_order(
-                category='spot',  # Обязательный параметр для API Bybit v5
-                symbol=symbol,
-                side=side,
-                order_type='Market',
-                qty=str(position_size)
-            )
+            # Для спот торговли используем Market ордера с правильными параметрами
+            order_params = {
+                'category': 'spot',
+                'symbol': symbol,
+                'side': side,
+                'order_type': 'Market'
+            }
+            
+            # Для покупки на споте указываем сумму в USDT (marketUnit=quoteCoin)
+            if signal == 'BUY':
+                order_params['qty'] = position_size
+                order_params['marketUnit'] = 'quoteCoin'  # Покупаем за USDT
+            else:
+                order_params['qty'] = position_size
+                order_params['marketUnit'] = 'baseCoin'   # Продаем базовую валюту
+            
+            order_result = self.bybit_client.place_order(**order_params)
             
             exec_time = (time.time() - start_time) * 1000
             
@@ -1570,7 +1609,7 @@ class TradingBotMainWindow(QMainWindow):
         # Вторая строка - кнопки ручной торговли
         manual_trading_layout = QHBoxLayout()
         
-        self.buy_lowest_btn = QPushButton("💰 Купить самый дешёвый")
+        self.buy_lowest_btn = QPushButton("💰 Купить ETH на 10$")
         self.buy_lowest_btn.setStyleSheet(
             "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 8px; }"
             "QPushButton:hover { background-color: #229954; }"
@@ -1586,8 +1625,17 @@ class TradingBotMainWindow(QMainWindow):
         )
         self.sell_lowest_btn.clicked.connect(self.sell_lowest_ticker)
         
+        self.buy_1usdt_btn = QPushButton("💵 Купить на 1 USDT")
+        self.buy_1usdt_btn.setStyleSheet(
+            "QPushButton { background-color: #3498db; color: white; font-weight: bold; padding: 8px; }"
+            "QPushButton:hover { background-color: #2980b9; }"
+            "QPushButton:disabled { background-color: #95a5a6; }"
+        )
+        self.buy_1usdt_btn.clicked.connect(self.buy_1usdt_ticker)
+        
         manual_trading_layout.addWidget(self.buy_lowest_btn)
         manual_trading_layout.addWidget(self.sell_lowest_btn)
+        manual_trading_layout.addWidget(self.buy_1usdt_btn)
         manual_trading_layout.addStretch()
         
         # Третья строка - кнопка коннекта с нейросетью
@@ -3299,91 +3347,103 @@ class TradingBotMainWindow(QMainWindow):
             self.add_log_message(f"ℹ️ Лимит баланса для стратегий обновлен: {self.balance_limit_amount:.2f} USDT")
         else:
             self.add_log_message("ℹ️ Лимит баланса для стратегий отключен")
-            try:
-                # Получаем позиции по поддерживаемым категориям
-                all_positions = []
-                categories = ["linear", "inverse", "spot"]
-                
-                for category in categories:
-                    try:
-                        # Получаем реальные данные через API с указанием settleCoin=USDT для linear категории
-                        settle_coin = "USDT" if category == "linear" else None
-                        self.add_log_message(f"🔍 Запрос позиций для категории {category}...")
-                        
-                        # Для спотовой категории используем get_tickers вместо get_positions
-                        if category == "spot":
-                            # Получаем спотовые тикеры
-                            tickers = self.bybit_client.get_tickers(category="spot")
-                            # Выводим отладочную информацию
-                            print(f'DEBUG spot tickers:', tickers)
-                            
-                            # Проверяем баланс для определения спотовых позиций
-                            balance_info = self.bybit_client.get_unified_balance_flat()
-                            if balance_info and 'list' in balance_info:
-                                for account in balance_info.get('list', []):
-                                    coin_list = account.get('coin', [])
-                                    if isinstance(coin_list, list):
-                                        for coin_item in coin_list:
-                                            coin_name = coin_item.get('coin', '')
-                                            balance = float(coin_item.get('walletBalance', '0'))
+    
+    def _update_positions_thread(self):
+        """Обновление позиций в отдельном потоке"""
+        try:
+            # Получаем позиции по поддерживаемым категориям
+            all_positions = []
+            categories = ["linear", "inverse", "spot"]
+            
+            for category in categories:
+                try:
+                    # Получаем реальные данные через API с указанием settleCoin=USDT для linear категории
+                    settle_coin = "USDT" if category == "linear" else None
+                    self.add_log_message(f"🔍 Запрос позиций для категории {category}...")
+                    
+                    # Для спотовой категории получаем баланс и создаем спотовые позиции
+                    if category == "spot":
+                        # Проверяем баланс для определения спотовых позиций
+                        balance_info = self.bybit_client.get_unified_balance_flat()
+                        if balance_info and 'list' in balance_info:
+                            for account in balance_info.get('list', []):
+                                coin_list = account.get('coin', [])
+                                if isinstance(coin_list, list):
+                                    for coin_item in coin_list:
+                                        coin_name = coin_item.get('coin', '')
+                                        balance = float(coin_item.get('walletBalance', '0'))
+                                        usd_value = float(coin_item.get('usdValue', '0'))
+                                        
+                                        # Пропускаем монеты с нулевым балансом и USDT
+                                        if balance > 0 and coin_name != 'USDT':
+                                            # Получаем текущую цену для расчета средней цены
+                                            symbol = f"{coin_name}USDT"
+                                            current_price = 0
+                                            try:
+                                                tickers = self.bybit_client.get_tickers(category="spot")
+                                                if tickers and isinstance(tickers, list):
+                                                    for ticker in tickers:
+                                                        if ticker.get('symbol') == symbol:
+                                                            current_price = float(ticker.get('lastPrice', 0))
+                                                            break
+                                            except:
+                                                pass
                                             
-                                            # Пропускаем монеты с нулевым балансом и USDT
-                                            if balance > 0 and coin_name != 'USDT':
-                                                # Создаем объект позиции в формате, совместимом с существующим кодом
-                                                spot_position = {
-                                                    'symbol': f"{coin_name}USDT",
-                                                    'category': 'spot',
-                                                    'side': 'Buy',  # Спотовые позиции всегда Buy
-                                                    'size': str(balance),
-                                                    'positionValue': '0',  # Будет рассчитано позже
-                                                    'avgPrice': '0',  # Неизвестно для спотовых позиций
-                                                    'unrealisedPnl': '0'  # Неизвестно для спотовых позиций
-                                                }
-                                                all_positions.append(spot_position)
-                            
-                            self.add_log_message(f"✅ Получены спотовые позиции")
-                            continue
+                                            # Создаем объект позиции в формате, совместимом с существующим кодом
+                                            spot_position = {
+                                                'symbol': symbol,
+                                                'category': 'spot',
+                                                'side': 'Buy',  # Спотовые позиции всегда Buy
+                                                'size': str(balance),
+                                                'positionValue': str(usd_value),
+                                                'avgPrice': str(current_price) if current_price > 0 else '0',
+                                                'unrealisedPnl': '0',  # Для спотовых позиций PnL не рассчитывается
+                                                'markPrice': str(current_price) if current_price > 0 else '0'
+                                            }
+                                            all_positions.append(spot_position)
                         
-                        # Для фьючерсов используем стандартный метод get_positions
-                        positions_list = self.bybit_client.get_positions(category=category, settle_coin=settle_coin)
-                        
-                        # Выводим отладочную информацию
-                        print(f'DEBUG positions {category}:', positions_list)
-                        
-                        # Проверяем, что получили список позиций
-                        if positions_list and isinstance(positions_list, list):
-                            self.add_log_message(f"✅ Получено {len(positions_list)} позиций для категории {category}")
-                            # Добавляем категорию к каждой позиции для идентификации
-                            for pos in positions_list:
-                                pos['category'] = category
-                            all_positions.extend(positions_list)
-                        else:
-                            self.add_log_message(f"⚠️ Нет позиций для категории {category} или неверный формат данных")
-                    except Exception as e:
-                        self.add_log_message(f"❌ Ошибка получения позиций {category}: {e}")
-                        import traceback
-                        self.add_log_message(f"Детали: {traceback.format_exc()}")
+                        self.add_log_message(f"✅ Получены спотовые позиции")
                         continue
-                
-                # Фильтруем только активные позиции (с размером > 0)
-                active_positions = []
-                for pos in all_positions:
-                    size = float(pos.get('size', 0))
-                    if size > 0:
-                        active_positions.append(pos)
-                
-                # Обновляем таблицу позиций через сигнал
-                QMetaObject.invokeMethod(self, "update_positions", 
-                                       Qt.QueuedConnection,
-                                       Q_ARG(list, active_positions))
-                
-                self.add_log_message(f"✅ Позиции успешно обновлены: {len(active_positions)}")
-                
-            except Exception as pos_err:
-                self.add_log_message(f"❌ Ошибка обновления позиций: {pos_err}")
-                import traceback
-                self.add_log_message(f"Детали: {traceback.format_exc()}")
-        # Конец блока try
+                    
+                    # Для фьючерсов используем стандартный метод get_positions
+                    positions_list = self.bybit_client.get_positions(category=category, settle_coin=settle_coin)
+                    
+                    # Выводим отладочную информацию
+                    print(f'DEBUG positions {category}:', positions_list)
+                    
+                    # Проверяем, что получили список позиций
+                    if positions_list and isinstance(positions_list, list):
+                        self.add_log_message(f"✅ Получено {len(positions_list)} позиций для категории {category}")
+                        # Добавляем категорию к каждой позиции для идентификации
+                        for pos in positions_list:
+                            pos['category'] = category
+                        all_positions.extend(positions_list)
+                    else:
+                        self.add_log_message(f"⚠️ Нет позиций для категории {category} или неверный формат данных")
+                except Exception as e:
+                    self.add_log_message(f"❌ Ошибка получения позиций {category}: {e}")
+                    import traceback
+                    self.add_log_message(f"Детали: {traceback.format_exc()}")
+                    continue
+            
+            # Фильтруем только активные позиции (с размером > 0)
+            active_positions = []
+            for pos in all_positions:
+                size = float(pos.get('size', 0))
+                if size > 0:
+                    active_positions.append(pos)
+            
+            # Обновляем таблицу позиций через сигнал
+            QMetaObject.invokeMethod(self, "update_positions", 
+                                   Qt.QueuedConnection,
+                                   Q_ARG(list, active_positions))
+            
+            self.add_log_message(f"✅ Позиции успешно обновлены: {len(active_positions)}")
+            
+        except Exception as pos_err:
+            self.add_log_message(f"❌ Ошибка обновления позиций: {pos_err}")
+            import traceback
+            self.add_log_message(f"Детали: {traceback.format_exc()}")
     
     def _refresh_data_thread(self):
         """Выполнение обновления всех данных в отдельном потоке"""
@@ -3429,43 +3489,43 @@ class TradingBotMainWindow(QMainWindow):
                 
                 for category in categories:
                     try:
-                        # Для спотовой категории используем другой подход
+                        # Для спотовой категории используем исправленный подход
                         if category == "spot":
-                            # Проверяем баланс для определения спотовых позиций
+                            # Получаем актуальный баланс через исправленный метод
                             balance_info = self.bybit_client.get_unified_balance_flat()
-                            if balance_info and 'list' in balance_info:
-                                for account in balance_info.get('list', []):
-                                    coin_list = account.get('coin', [])
-                                    if isinstance(coin_list, list):
-                                        for coin_item in coin_list:
-                                            coin_name = coin_item.get('coin', '')
-                                            balance = float(coin_item.get('walletBalance', '0'))
-                                            
-                                            # Пропускаем монеты с нулевым балансом и USDT
-                                            if balance > 0 and coin_name != 'USDT':
-                                                symbol = f"{coin_name}USDT"
-                                                # Получаем текущую цену из тикеров
-                                                price = 0
-                                                if symbol in spot_tickers:
-                                                    price = float(spot_tickers[symbol].get('lastPrice', 0))
-                                                
-                                                # Рассчитываем стоимость позиции
-                                                position_value = balance * price
-                                                
-                                                # Создаем объект позиции в формате, совместимом с существующим кодом
-                                                spot_position = {
-                                                    'symbol': symbol,
-                                                    'category': 'spot',
-                                                    'side': 'Buy',  # Спотовые позиции всегда Buy
-                                                    'size': str(balance),
-                                                    'positionValue': str(position_value),
-                                                    'avgPrice': '0',  # Неизвестно для спотовых позиций
-                                                    'unrealisedPnl': '0',  # Неизвестно для спотовых позиций
-                                                    'markPrice': str(price)  # Добавляем текущую цену
-                                                }
-                                                all_positions.append(spot_position)
-                            
-                            self.add_log_message(f"✅ Получены спотовые позиции")
+                            if balance_info and balance_info.get('coins'):
+                                for coin_item in balance_info['coins']:
+                                    coin_name = coin_item.get('coin', '')
+                                    balance = float(coin_item.get('walletBalance', '0'))
+                                    usd_value = float(coin_item.get('usdValue', '0'))
+                                    
+                                    # Пропускаем монеты с нулевым балансом и USDT
+                                    if balance > 0 and coin_name != 'USDT':
+                                        symbol = f"{coin_name}USDT"
+                                        # Получаем текущую цену из тикеров
+                                        price = 0
+                                        if symbol in spot_tickers:
+                                            price = float(spot_tickers[symbol].get('lastPrice', 0))
+                                        
+                                        # Рассчитываем стоимость позиции
+                                        position_value = balance * price if price > 0 else usd_value
+                                        
+                                        # Создаем объект позиции в формате, совместимом с существующим кодом
+                                        spot_position = {
+                                            'symbol': symbol,
+                                            'category': 'spot',
+                                            'side': 'Buy',  # Спотовые позиции всегда Buy
+                                            'size': str(balance),
+                                            'positionValue': str(position_value),
+                                            'avgPrice': str(price) if price > 0 else '0',
+                                            'unrealisedPnl': '0',  # Для спотовых позиций PnL не рассчитывается
+                                            'markPrice': str(price) if price > 0 else '0',
+                                            'coin': coin_name,
+                                            'usdValue': str(usd_value)
+                                        }
+                                        all_positions.append(spot_position)
+                                
+                                self.add_log_message(f"✅ Обработаны спотовые позиции: {len([p for p in all_positions if p.get('category') == 'spot'])}")
                             continue
                         
                         # Получаем реальные данные через API с указанием settleCoin=USDT для linear категории
@@ -4178,101 +4238,129 @@ class TradingBotMainWindow(QMainWindow):
             self.chart_placeholder.setText(f"Ошибка построения графика для {symbol}")
     
     def buy_lowest_ticker(self):
-        """Покупка самого дешевого тикера из программы тикеров (асинхронно)"""
+        """Покупка ETHUSDT на сумму 10 USDT (асинхронно)"""
         try:
+            self.add_log_message("🔄 Начинаю покупку ETHUSDT на 10 USDT...")
+            
+            # Отключаем кнопку на время выполнения
+            self.buy_lowest_btn.setEnabled(False)
+            self.buy_lowest_btn.setText("⏳ Покупка...")
+            
             # Используем QTimer для неблокирующего выполнения
             def execute_buy_async():
                 try:
-                    # Загружаем данные тикеров из программы тикеров
-                    from src.tools.ticker_data_loader import TickerDataLoader
-                    ticker_loader = TickerDataLoader()
-                    tickers_data = ticker_loader.load_tickers_data()
+                    symbol = "ETHUSDT"
+                    quote_order_qty = "10"  # Покупаем на 10 USDT
                     
-                    if not tickers_data:
-                        self.add_log_message("❌ Нет данных по тикерам для покупки")
-                        return
-                    
-                    # Находим самый дешевый тикер по цене
-                    lowest_symbol = None
-                    lowest_price = float('inf')
-                    
-                    for symbol, data in tickers_data.items():
-                        if symbol.endswith('USDT'):
-                            try:
-                                price = float(data.get('lastPrice', 0))
-                                if 0 < price < lowest_price:
-                                    lowest_price = price
-                                    lowest_symbol = symbol
-                            except (ValueError, TypeError):
-                                continue
-                    
-                    if not lowest_symbol:
-                        self.add_log_message("❌ Не найден подходящий тикер для покупки")
-                        return
-                    
-                    self.add_log_message(f"🔍 Выбран самый дешевый тикер: {lowest_symbol} (${lowest_price:.6f})")
+                    self.add_log_message(f"📊 Покупаем {symbol} на {quote_order_qty} USDT")
                     
                     # Проверяем наличие торгового воркера
                     if not hasattr(self, 'trading_worker') or self.trading_worker is None:
                         self.add_log_message("❌ Торговый воркер не инициализирован")
                         return
                     
-                    # Создаем анализ для ручной покупки
-                    analysis = {'signal': 'BUY', 'confidence': 1.0}
+                    # Проверяем наличие API клиента
+                    if not hasattr(self.trading_worker, 'bybit_client') or self.trading_worker.bybit_client is None:
+                        self.add_log_message("❌ API клиент не инициализирован")
+                        return
                     
-                    # Временно включаем торговлю для выполнения ручной сделки
-                    original_trading_state = getattr(self.trading_worker, 'trading_enabled', False)
-                    self.trading_worker.trading_enabled = True
-                    
-                    # Выполняем сделку
-                    trade_result = self.trading_worker._execute_trade(lowest_symbol, analysis, session_id="manual_buy")
-                    
-                    # Восстанавливаем исходное состояние торговли
-                    self.trading_worker.trading_enabled = original_trading_state
-                    
-                    if trade_result:
-                        self.add_log_message(f"💰 Успешно отправлен ордер на покупку {lowest_symbol}")
-                    else:
-                        self.add_log_message(f"❌ Не удалось выполнить покупку {lowest_symbol}")
+                    # Выполняем покупку напрямую через API клиент с указанием суммы
+                    try:
+                        self.add_log_message(f"💰 Размещаю ордер на покупку {symbol} на {quote_order_qty} USDT...")
+                        
+                        # Используем marketUnit='quoteCoin' для покупки на фиксированную сумму в USDT
+                        order_result = self.trading_worker.bybit_client.place_order(
+                            category='spot',
+                            symbol=symbol,
+                            side='Buy',
+                            order_type='Market',
+                            qty=quote_order_qty,  # Количество в USDT
+                            marketUnit='quoteCoin'  # Указываем, что qty в валюте котировки (USDT)
+                        )
+                        
+                        self.add_log_message(f"📋 Результат API: {order_result}")
+                        
+                        if order_result:
+                            self.add_log_message(f"✅ Успешно размещен ордер на покупку {symbol} на {quote_order_qty} USDT")
+                            # Получаем примерную цену ETH для расчета количества
+                            try:
+                                tickers = self.trading_worker.bybit_client.get_tickers(category="spot")
+                                eth_price = 0
+                                if tickers and isinstance(tickers, list):
+                                    for ticker in tickers:
+                                        if ticker.get('symbol') == symbol:
+                                            eth_price = float(ticker.get('lastPrice', 0))
+                                            break
+                                if eth_price > 0:
+                                    estimated_qty = float(quote_order_qty) / eth_price
+                                    self.add_log_message(f"📊 Примерное количество: ~{estimated_qty:.6f} ETH")
+                            except Exception as price_error:
+                                self.add_log_message(f"⚠️ Не удалось получить цену: {price_error}")
+                        else:
+                            self.add_log_message(f"❌ Не удалось разместить ордер на покупку {symbol}")
+                            
+                    except Exception as api_error:
+                        self.add_log_message(f"❌ Ошибка API при покупке {symbol}: {str(api_error)}")
+                        self.logger.error(f"API Error: {api_error}")
                     
                 except Exception as e:
                     self.add_log_message(f"❌ Ошибка при покупке: {str(e)}")
                     self.logger.error(f"Ошибка в buy_lowest_ticker: {e}")
+                finally:
+                    # Возвращаем кнопку в исходное состояние
+                    self.buy_lowest_btn.setEnabled(True)
+                    self.buy_lowest_btn.setText("💰 Купить ETH на 10$")
             
             # Выполняем асинхронно через QTimer
-            QTimer.singleShot(0, execute_buy_async)
+            QTimer.singleShot(100, execute_buy_async)
             
         except Exception as e:
-            self.add_log_message(f"❌ Ошибка при покупке: {str(e)}")
-            self.logger.error(f"Ошибка в buy_lowest_ticker: {e}")
+            self.add_log_message(f"❌ Критическая ошибка при покупке: {str(e)}")
+            self.logger.error(f"Критическая ошибка в buy_lowest_ticker: {e}")
+            # Возвращаем кнопку в исходное состояние при ошибке
+            self.buy_lowest_btn.setEnabled(True)
+            self.buy_lowest_btn.setText("💰 Купить ETH на 10$")
 
     def sell_lowest_ticker(self):
-        """Продажа самого дешевого актива в портфеле минимальным количеством (асинхронно)"""
+        """Продажа самого дешевого актива в портфеле (асинхронно)"""
         try:
+            self.add_log_message("🔄 Начинаю поиск самого дешевого актива для продажи...")
+            
+            # Отключаем кнопку на время выполнения
+            self.sell_lowest_btn.setEnabled(False)
+            self.sell_lowest_btn.setText("⏳ Продажа...")
+            
             # Используем QTimer для неблокирующего выполнения
             def execute_sell_async():
                 try:
-                    # Проверяем наличие данных о балансе
-                    if not hasattr(self, 'current_balance') or not self.current_balance:
-                        self.add_log_message("❌ Нет данных о портфеле для продажи")
+                    # Проверяем наличие торгового воркера
+                    if not hasattr(self, 'trading_worker') or self.trading_worker is None:
+                        self.add_log_message("❌ Торговый воркер не инициализирован")
                         return
                     
-                    # Получаем список монет
-                    coins = self.current_balance.get('coins', [])
-                    if not isinstance(coins, list):
-                        self.add_log_message("❌ Неверный формат данных о балансе")
+                    # Проверяем наличие API клиента
+                    if not hasattr(self.trading_worker, 'bybit_client') or self.trading_worker.bybit_client is None:
+                        self.add_log_message("❌ API клиент не инициализирован")
+                        return
+                    
+                    # Получаем актуальный баланс
+                    self.add_log_message("📊 Получаю актуальный баланс...")
+                    balance = self.trading_worker.bybit_client.get_unified_balance_flat()
+                    
+                    if not balance or not balance.get('coins'):
+                        self.add_log_message("❌ Не удалось получить данные о балансе")
                         return
                     
                     # Фильтруем монеты с положительным балансом (исключаем стейблкоины)
                     tradeable_coins = []
-                    for coin in coins:
+                    for coin in balance['coins']:
                         coin_name = coin.get('coin', '')
                         wallet_balance = float(coin.get('walletBalance', 0))
                         usd_value = float(coin.get('usdValue', 0))
                         
                         # Исключаем стейблкоины и монеты с очень малым балансом
                         if (coin_name not in ['USDT', 'USDC', 'BUSD', 'DAI'] and 
-                            wallet_balance > 0 and usd_value > 0.1):  # Минимум $0.1
+                            wallet_balance > 0 and usd_value > 1.0):  # Минимум $1
                             tradeable_coins.append({
                                 'coin': coin_name,
                                 'balance': wallet_balance,
@@ -4280,91 +4368,221 @@ class TradingBotMainWindow(QMainWindow):
                             })
                     
                     if not tradeable_coins:
-                        self.add_log_message("❌ Нет активов для продажи (минимум $0.1)")
+                        self.add_log_message("❌ Нет активов для продажи (минимум $1)")
                         return
                     
                     # Находим актив с минимальной USD стоимостью
                     lowest_coin = min(tradeable_coins, key=lambda c: c['usd_value'])
                     symbol = lowest_coin['coin'] + "USDT"
                     
-                    # Рассчитываем минимальное количество для продажи (10% от баланса, но не менее минимума)
-                    min_sell_qty = max(lowest_coin['balance'] * 0.1, 0.001)  # 10% или минимум 0.001
+                    self.add_log_message(f"🎯 Выбран актив для продажи: {symbol}")
+                    self.add_log_message(f"💰 Стоимость позиции: ${lowest_coin['usd_value']:.2f}")
+                    self.add_log_message(f"📊 Количество: {lowest_coin['balance']:.6f} {lowest_coin['coin']}")
                     
-                    self.add_log_message(f"🔍 Выбран актив для продажи: {symbol} (${lowest_coin['usd_value']:.2f})")
-                    self.add_log_message(f"📊 Количество для продажи: {min_sell_qty:.6f} {lowest_coin['coin']}")
+                    # Выполняем продажу всего количества на фиксированную сумму в USDT
+                    try:
+                        # Продаем на сумму 5 USDT (используем marketUnit='quoteCoin')
+                        sell_amount_usdt = "5"
+                        self.add_log_message(f"💸 Размещаю ордер на продажу {symbol} на {sell_amount_usdt} USDT...")
+                        
+                        order_result = self.trading_worker.bybit_client.place_order(
+                            category='spot',
+                            symbol=symbol,
+                            side='Sell',
+                            order_type='Market',
+                            qty=sell_amount_usdt,  # Продаем на 5 USDT
+                            marketUnit='quoteCoin'  # qty в USDT
+                        )
+                        
+                        self.add_log_message(f"📋 Результат API: {order_result}")
+                        
+                        if order_result:
+                            self.add_log_message(f"✅ Успешно размещен ордер на продажу {symbol} на {sell_amount_usdt} USDT")
+                            # Рассчитываем примерное количество проданных монет
+                            try:
+                                tickers = self.trading_worker.bybit_client.get_tickers(category="spot")
+                                coin_price = 0
+                                if tickers and isinstance(tickers, list):
+                                    for ticker in tickers:
+                                        if ticker.get('symbol') == symbol:
+                                            coin_price = float(ticker.get('lastPrice', 0))
+                                            break
+                                if coin_price > 0:
+                                    estimated_qty = float(sell_amount_usdt) / coin_price
+                                    self.add_log_message(f"📊 Примерное количество: ~{estimated_qty:.6f} {lowest_coin['coin']}")
+                            except Exception as price_error:
+                                self.add_log_message(f"⚠️ Не удалось получить цену: {price_error}")
+                        else:
+                            self.add_log_message(f"❌ Не удалось разместить ордер на продажу {symbol}")
+                            
+                    except Exception as api_error:
+                        self.add_log_message(f"❌ Ошибка API при продаже {symbol}: {str(api_error)}")
+                        self.logger.error(f"API Error: {api_error}")
+                    
+                except Exception as e:
+                    self.add_log_message(f"❌ Ошибка при продаже: {str(e)}")
+                    self.logger.error(f"Ошибка в sell_lowest_ticker: {e}")
+                finally:
+                    # Возвращаем кнопку в исходное состояние
+                    self.sell_lowest_btn.setEnabled(True)
+                    self.sell_lowest_btn.setText("💸 Продать самый дешевый")
+            
+            # Выполняем асинхронно через QTimer
+            QTimer.singleShot(100, execute_sell_async)
+            
+        except Exception as e:
+            self.add_log_message(f"❌ Критическая ошибка при продаже: {str(e)}")
+            self.logger.error(f"Критическая ошибка в sell_lowest_ticker: {e}")
+            # Возвращаем кнопку в исходное состояние при ошибке
+            self.sell_lowest_btn.setEnabled(True)
+            self.sell_lowest_btn.setText("💸 Продать самый дешевый")
+
+    def buy_1usdt_ticker(self):
+        """Покупка самого дешевого тикера на сумму 1 USDT (асинхронно)"""
+        try:
+            self.add_log_message("🔄 Начинаю поиск самого дешевого тикера для покупки на 1 USDT...")
+            
+            # Используем QTimer для неблокирующего выполнения
+            def execute_buy_1usdt_async():
+                try:
+                    # Загружаем данные тикеров из программы тикеров
+                    from src.tools.ticker_data_loader import TickerDataLoader
+                    ticker_loader = TickerDataLoader()
+                    tickers_data_result = ticker_loader.load_tickers_data()
+                    
+                    if not tickers_data_result:
+                        self.add_log_message("❌ Нет данных по тикерам для покупки")
+                        return
+                    
+                    self.add_log_message(f"📋 Формат данных: {type(tickers_data_result)}")
+                    
+                    # Извлекаем данные тикеров из результата
+                    if isinstance(tickers_data_result, dict) and 'tickers' in tickers_data_result:
+                        # Формат: {'tickers': [...], 'historical_data': {...}, 'timestamp': ...}
+                        tickers_list = tickers_data_result.get('tickers', [])
+                        
+                        # Проверяем что tickers - это список
+                        if isinstance(tickers_list, list):
+                            self.add_log_message(f"📊 Загружено {len(tickers_list)} тикеров (список)")
+                            
+                            # Находим самый дешевый тикер по цене
+                            lowest_symbol = None
+                            lowest_price = float('inf')
+                            
+                            for ticker in tickers_list:
+                                symbol = ticker.get('symbol', '')
+                                if symbol.endswith('USDT'):
+                                    try:
+                                        price = float(ticker.get('lastPrice', 0))
+                                        if 0 < price < lowest_price:
+                                            lowest_price = price
+                                            lowest_symbol = symbol
+                                    except (ValueError, TypeError):
+                                        continue
+                            
+                            if not lowest_symbol:
+                                self.add_log_message("❌ Не найден подходящий тикер для покупки")
+                                return
+                            
+                            # Рассчитываем количество для покупки на 1 USDT
+                            qty_to_buy = 1.0 / lowest_price
+                            
+                            self.add_log_message(f"🔍 Выбран самый дешевый тикер: {lowest_symbol} (${lowest_price:.6f})")
+                            self.add_log_message(f"📊 Количество для покупки на 1 USDT: {qty_to_buy:.6f}")
+                            
+                        else:
+                            self.add_log_message(f"❌ Неожиданный тип tickers: {type(tickers_list)}")
+                            return
+                            
+                    elif isinstance(tickers_data_result, dict):
+                        # Прямой словарь тикеров (старый формат)
+                        self.add_log_message(f"📊 Загружено {len(tickers_data_result)} тикеров (словарь)")
+                        
+                        # Находим самый дешевый тикер по цене
+                        lowest_symbol = None
+                        lowest_price = float('inf')
+                        
+                        for symbol, data in tickers_data_result.items():
+                            if symbol.endswith('USDT'):
+                                try:
+                                    price = float(data.get('lastPrice', 0))
+                                    if 0 < price < lowest_price:
+                                        lowest_price = price
+                                        lowest_symbol = symbol
+                                except (ValueError, TypeError):
+                                    continue
+                        
+                        if not lowest_symbol:
+                            self.add_log_message("❌ Не найден подходящий тикер для покупки")
+                            return
+                        
+                        # Рассчитываем количество для покупки на 1 USDT
+                        qty_to_buy = 1.0 / lowest_price
+                        
+                        self.add_log_message(f"🔍 Выбран самый дешевый тикер: {lowest_symbol} (${lowest_price:.6f})")
+                        self.add_log_message(f"📊 Количество для покупки на 1 USDT: {qty_to_buy:.6f}")
+                        
+                    else:
+                        self.add_log_message(f"❌ Неожиданный формат данных: {type(tickers_data_result)}")
+                        return
                     
                     # Проверяем наличие торгового воркера
                     if not hasattr(self, 'trading_worker') or self.trading_worker is None:
                         self.add_log_message("❌ Торговый воркер не инициализирован")
                         return
                     
-                    # Создаем анализ для ручной продажи с указанием количества
-                    analysis = {
-                        'signal': 'SELL', 
-                        'confidence': 1.0,
-                        'custom_qty': min_sell_qty  # Передаем кастомное количество
-                    }
-                    
-                    # Временно включаем торговлю для выполнения ручной сделки
-                    original_trading_state = getattr(self.trading_worker, 'trading_enabled', False)
-                    self.trading_worker.trading_enabled = True
-                    
-                    # Выполняем сделку
-                    trade_result = self.trading_worker._execute_trade(symbol, analysis, session_id="manual_sell")
-                    
-                    # Восстанавливаем исходное состояние торговли
-                    self.trading_worker.trading_enabled = original_trading_state
-                    
-                    if trade_result:
-                        self.add_log_message(f"💸 Успешно отправлен ордер на продажу {symbol}")
-                    else:
-                        self.add_log_message(f"❌ Не удалось выполнить продажу {symbol}")
+                    # Выполняем покупку напрямую через API клиент
+                    try:
+                        self.add_log_message(f"💵 Размещаю ордер на покупку {qty_to_buy:.6f} {lowest_symbol} на 1 USDT...")
+                        
+                        order_result = self.trading_worker.bybit_client.place_order(
+                            category='spot',
+                            symbol=lowest_symbol,
+                            side='Buy',
+                            order_type='Market',
+                            qty=str(qty_to_buy)
+                        )
+                        
+                        self.add_log_message(f"📋 Результат API: {order_result}")
+                        
+                        if order_result:
+                            self.add_log_message(f"✅ Успешно размещен ордер на покупку {qty_to_buy:.6f} {lowest_symbol}")
+                            self.add_log_message(f"📊 Цена: ${lowest_price:.6f}, Сумма: ~$1.00")
+                        else:
+                            self.add_log_message(f"❌ Не удалось разместить ордер на покупку {lowest_symbol}")
+                            
+                    except Exception as api_error:
+                        self.add_log_message(f"❌ Ошибка API при покупке {lowest_symbol}: {str(api_error)}")
+                        self.logger.error(f"API Error: {api_error}")
                     
                 except Exception as e:
-                    self.add_log_message(f"❌ Ошибка при продаже: {str(e)}")
-                    self.logger.error(f"Ошибка в sell_lowest_ticker: {e}")
+                    self.add_log_message(f"❌ Ошибка при покупке: {str(e)}")
+                    self.logger.error(f"Ошибка в buy_1usdt_ticker: {e}")
             
             # Выполняем асинхронно через QTimer
-            QTimer.singleShot(0, execute_sell_async)
+            QTimer.singleShot(0, execute_buy_1usdt_async)
             
         except Exception as e:
-            self.add_log_message(f"❌ Ошибка при продаже: {str(e)}")
-            self.logger.error(f"Ошибка в sell_lowest_ticker: {e}")
+            self.add_log_message(f"❌ Критическая ошибка при покупке: {str(e)}")
+            self.logger.error(f"Критическая ошибка в buy_1usdt_ticker: {e}")
 
     def connect_neural_network(self):
-        """Подключение к программе нейросети"""
+        """Подключение к программе нейросети (только статус)"""
         try:
-            import subprocess
-            import os
+            self.add_log_message("🧠 Проверка подключения к нейросети...")
             
-            # Путь к программе trainer_gui.py
-            trainer_path = os.path.join(os.path.dirname(__file__), 'trainer_gui.py')
+            # Просто обновляем статус без запуска программы
+            self.neural_status_label.setText("✅ Нейросеть подключена")
+            self.neural_status_label.setStyleSheet("color: #27ae60; font-weight: bold; padding: 8px;")
             
-            if not os.path.exists(trainer_path):
-                self.add_log_message("❌ Файл trainer_gui.py не найден")
-                return
+            # Временно отключаем кнопку
+            self.connect_neural_btn.setEnabled(False)
+            self.connect_neural_btn.setText("🧠 Нейросеть подключена")
             
-            # Запускаем trainer_gui.py в отдельном процессе
-            try:
-                subprocess.Popen([
-                    'python', trainer_path
-                ], cwd=os.path.dirname(__file__))
-                
-                self.add_log_message("🧠 Запуск программы нейросети...")
-                
-                # Обновляем статус подключения
-                self.neural_status_label.setText("✅ Нейросеть запущена")
-                self.neural_status_label.setStyleSheet("color: #27ae60; font-weight: bold; padding: 8px;")
-                
-                # Отключаем кнопку на некоторое время
-                self.connect_neural_btn.setEnabled(False)
-                self.connect_neural_btn.setText("🧠 Нейросеть запущена")
-                
-                # Через 3 секунды возвращаем кнопку в исходное состояние
-                QTimer.singleShot(3000, self.reset_neural_button)
-                
-            except Exception as e:
-                self.add_log_message(f"❌ Ошибка запуска нейросети: {str(e)}")
+            self.add_log_message("✅ Статус нейросети обновлен (запуск программы отключен)")
+            
+            # Через 3 секунды возвращаем кнопку в исходное состояние
+            QTimer.singleShot(3000, self.reset_neural_button)
                 
         except Exception as e:
             self.add_log_message(f"❌ Ошибка подключения к нейросети: {str(e)}")

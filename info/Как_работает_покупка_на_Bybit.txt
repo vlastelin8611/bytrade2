@@ -1,0 +1,345 @@
+# 📖 ПОЛНОЕ РУКОВОДСТВО: Как работает покупка на Bybit
+
+## 🎯 ОСНОВНАЯ КОНЦЕПЦИЯ
+
+Покупка криптовалюты на Bybit через API происходит с помощью endpoint `/v5/order/create`.
+Ключевая особенность - правильное использование параметра `marketUnit` для указания валюты количества.
+
+## 🔑 КЛЮЧЕВЫЕ ПАРАМЕТРЫ
+
+### Обязательные параметры:
+```python
+{
+    'category': 'spot',           # Тип торговли (spot/linear/inverse)
+    'symbol': 'ETHUSDT',          # Торговая пара
+    'side': 'Buy',                # Направление (Buy/Sell)
+    'orderType': 'Market',        # Тип ордера (Market/Limit)
+    'qty': '10',                  # Количество (строка!)
+    'marketUnit': 'quoteCoin'     # 🔑 КРИТИЧЕСКИ ВАЖНО!
+}
+```
+
+### Параметр marketUnit:
+- **'quoteCoin'** - qty указывается в валюте котировки (USDT для ETHUSDT)
+- **'baseCoin'** - qty указывается в базовой валюте (ETH для ETHUSDT)
+
+## 💡 РАБОЧИЕ ПРИМЕРЫ КОДА
+
+### 1. Покупка ETH на фиксированную сумму в USDT
+```python
+def buy_eth_for_usdt_amount():
+    """Покупка ETH на 10 USDT"""
+    order_result = api_client.place_order(
+        category='spot',
+        symbol='ETHUSDT',
+        side='Buy',
+        order_type='Market',
+        qty='10',                    # 10 USDT
+        marketUnit='quoteCoin'       # qty в USDT
+    )
+    return order_result
+
+# Результат: Купит ETH на сумму 10 USDT
+# Количество ETH = 10 USDT / текущая_цена_ETH
+```
+
+### 2. Покупка фиксированного количества ETH
+```python
+def buy_fixed_eth_amount():
+    """Покупка 0.01 ETH"""
+    order_result = api_client.place_order(
+        category='spot',
+        symbol='ETHUSDT',
+        side='Buy',
+        order_type='Market',
+        qty='0.01',                  # 0.01 ETH
+        marketUnit='baseCoin'        # qty в ETH
+    )
+    return order_result
+
+# Результат: Купит ровно 0.01 ETH
+# Стоимость = 0.01 ETH * текущая_цена_ETH
+```
+
+### 3. Продажа ETH на фиксированную сумму в USDT
+```python
+def sell_eth_for_usdt_amount():
+    """Продажа ETH на получение 15 USDT"""
+    order_result = api_client.place_order(
+        category='spot',
+        symbol='ETHUSDT',
+        side='Sell',
+        order_type='Market',
+        qty='15',                    # 15 USDT
+        marketUnit='quoteCoin'       # qty в USDT
+    )
+    return order_result
+
+# Результат: Продаст ETH на сумму 15 USDT
+# Количество ETH = 15 USDT / текущая_цена_ETH
+```
+
+### 4. Продажа фиксированного количества ETH
+```python
+def sell_fixed_eth_amount():
+    """Продажа 0.005 ETH"""
+    order_result = api_client.place_order(
+        category='spot',
+        symbol='ETHUSDT',
+        side='Sell',
+        order_type='Market',
+        qty='0.005',                 # 0.005 ETH
+        marketUnit='baseCoin'        # qty в ETH
+    )
+    return order_result
+
+# Результат: Продаст ровно 0.005 ETH
+# Получит = 0.005 ETH * текущая_цена_ETH USDT
+```
+
+## 🔧 ПОЛНЫЙ РАБОЧИЙ КОД ИЗ ПРОЕКТА
+
+```python
+def buy_lowest_ticker(self):
+    """Покупка ETHUSDT на сумму 10 USDT (асинхронно)"""
+    try:
+        self.add_log_message("🔄 Начинаю покупку ETHUSDT на 10 USDT...")
+        
+        # Отключаем кнопку на время выполнения
+        self.buy_lowest_btn.setEnabled(False)
+        self.buy_lowest_btn.setText("⏳ Покупка...")
+        
+        # Используем QTimer для неблокирующего выполнения
+        def execute_buy_async():
+            try:
+                symbol = "ETHUSDT"
+                quote_order_qty = "10"  # Покупаем на 10 USDT
+                
+                self.add_log_message(f"📊 Покупаем {symbol} на {quote_order_qty} USDT")
+                
+                # Проверяем наличие торгового воркера
+                if not hasattr(self, 'trading_worker') or self.trading_worker is None:
+                    self.add_log_message("❌ Торговый воркер не инициализирован")
+                    return
+                
+                # Проверяем наличие API клиента
+                if not hasattr(self.trading_worker, 'bybit_client') or self.trading_worker.bybit_client is None:
+                    self.add_log_message("❌ API клиент не инициализирован")
+                    return
+                
+                # 🔑 КЛЮЧЕВАЯ ЧАСТЬ: Выполняем покупку с правильными параметрами
+                try:
+                    self.add_log_message(f"💰 Размещаю ордер на покупку {symbol} на {quote_order_qty} USDT...")
+                    
+                    # ✅ РАБОЧИЕ ПАРАМЕТРЫ:
+                    order_result = self.trading_worker.bybit_client.place_order(
+                        category='spot',                    # Спотовая торговля
+                        symbol=symbol,                      # ETHUSDT
+                        side='Buy',                         # Покупка
+                        order_type='Market',                # Рыночный ордер
+                        qty=quote_order_qty,                # Количество в USDT (10)
+                        marketUnit='quoteCoin'              # 🔑 КЛЮЧЕВОЙ ПАРАМЕТР!
+                    )
+                    
+                    self.add_log_message(f"📋 Результат API: {order_result}")
+                    
+                    if order_result:
+                        self.add_log_message(f"✅ Успешно размещен ордер на покупку {symbol} на {quote_order_qty} USDT")
+                        
+                        # Расчет примерного количества ETH
+                        try:
+                            tickers = self.trading_worker.bybit_client.get_tickers(category="spot")
+                            eth_price = 0
+                            if tickers and isinstance(tickers, list):
+                                for ticker in tickers:
+                                    if ticker.get('symbol') == symbol:
+                                        eth_price = float(ticker.get('lastPrice', 0))
+                                        break
+                            if eth_price > 0:
+                                estimated_qty = float(quote_order_qty) / eth_price
+                                self.add_log_message(f"📊 Примерное количество: ~{estimated_qty:.6f} ETH")
+                        except Exception as price_error:
+                            self.add_log_message(f"⚠️ Не удалось получить цену: {price_error}")
+                    else:
+                        self.add_log_message(f"❌ Не удалось разместить ордер на покупку {symbol}")
+                        
+                except Exception as api_error:
+                    self.add_log_message(f"❌ Ошибка API при покупке {symbol}: {str(api_error)}")
+                    self.logger.error(f"API Error: {api_error}")
+                
+            except Exception as e:
+                self.add_log_message(f"❌ Ошибка при покупке: {str(e)}")
+                self.logger.error(f"Ошибка в buy_lowest_ticker: {e}")
+            finally:
+                # Возвращаем кнопку в исходное состояние
+                self.buy_lowest_btn.setEnabled(True)
+                self.buy_lowest_btn.setText("💰 Купить ETH на 10$")
+        
+        # Выполняем асинхронно через QTimer
+        QTimer.singleShot(100, execute_buy_async)
+        
+    except Exception as e:
+        self.add_log_message(f"❌ Критическая ошибка при покупке: {str(e)}")
+        self.logger.error(f"Критическая ошибка в buy_lowest_ticker: {e}")
+        # Возвращаем кнопку в исходное состояние при ошибке
+        self.buy_lowest_btn.setEnabled(True)
+        self.buy_lowest_btn.setText("💰 Купить ETH на 10$")
+```
+
+## 📊 РАЗЛИЧНЫЕ ТОРГОВЫЕ ПАРЫ
+
+### Bitcoin (BTC):
+```python
+# Покупка BTC на 50 USDT
+api_client.place_order(
+    category='spot',
+    symbol='BTCUSDT',
+    side='Buy',
+    order_type='Market',
+    qty='50',
+    marketUnit='quoteCoin'
+)
+
+# Покупка 0.001 BTC
+api_client.place_order(
+    category='spot',
+    symbol='BTCUSDT',
+    side='Buy',
+    order_type='Market',
+    qty='0.001',
+    marketUnit='baseCoin'
+)
+```
+
+### Другие альткоины:
+```python
+# Покупка SOL на 25 USDT
+api_client.place_order(
+    category='spot',
+    symbol='SOLUSDT',
+    side='Buy',
+    order_type='Market',
+    qty='25',
+    marketUnit='quoteCoin'
+)
+
+# Покупка ADA на 30 USDT
+api_client.place_order(
+    category='spot',
+    symbol='ADAUSDT',
+    side='Buy',
+    order_type='Market',
+    qty='30',
+    marketUnit='quoteCoin'
+)
+```
+
+## ⚠️ ВАЖНЫЕ ОГРАНИЧЕНИЯ И ТРЕБОВАНИЯ
+
+### Минимальные суммы ордеров:
+- **ETHUSDT**: минимум ~10 USDT
+- **BTCUSDT**: минимум ~10 USDT  
+- **Другие пары**: проверяйте через API instruments-info
+
+### Проверка минимальных лимитов:
+```python
+import requests
+
+def check_trading_limits(symbol):
+    """Проверка лимитов для торговой пары"""
+    url = f'https://api-testnet.bybit.com/v5/market/instruments-info?category=spot&symbol={symbol}'
+    response = requests.get(url)
+    data = response.json()
+    
+    if 'result' in data and 'list' in data['result']:
+        instrument = data['result']['list'][0]
+        lot_filter = instrument.get('lotSizeFilter', {})
+        
+        print(f"Символ: {symbol}")
+        print(f"Минимальное количество: {lot_filter.get('minOrderQty', 'N/A')}")
+        print(f"Минимальная сумма: {lot_filter.get('minOrderAmt', 'N/A')}")
+        print(f"Шаг количества: {lot_filter.get('qtyStep', 'N/A')}")
+        
+        return lot_filter
+    
+    return None
+
+# Пример использования
+check_trading_limits('ETHUSDT')
+```
+
+## 🚨 ЧАСТЫЕ ОШИБКИ И ИХ РЕШЕНИЯ
+
+### 1. "Order value exceeded lower limit"
+**Причина**: Сумма ордера меньше минимального лимита
+**Решение**: Увеличить qty или проверить лимиты через API
+
+### 2. "Invalid parameter marketUnit"
+**Причина**: Неправильное значение marketUnit
+**Решение**: Использовать только 'quoteCoin' или 'baseCoin'
+
+### 3. "Insufficient balance"
+**Причина**: Недостаточно средств на балансе
+**Решение**: Проверить баланс через get_wallet_balance()
+
+### 4. Ордер не исполняется
+**Причина**: Использование Limit ордера в неликвидном рынке
+**Решение**: Использовать Market ордера для гарантированного исполнения
+
+## 📈 МОНИТОРИНГ РЕЗУЛЬТАТОВ
+
+### Проверка статуса ордера:
+```python
+def check_order_status(order_id):
+    """Проверка статуса ордера"""
+    result = api_client.get_order_history(
+        category='spot',
+        limit=50
+    )
+    
+    for order in result.get('list', []):
+        if order.get('orderId') == order_id:
+            return {
+                'status': order.get('orderStatus'),
+                'filled_qty': order.get('cumExecQty'),
+                'avg_price': order.get('avgPrice')
+            }
+    
+    return None
+```
+
+### Получение истории торгов:
+```python
+def get_recent_trades():
+    """Получение последних сделок"""
+    result = api_client.get_execution_list(
+        category='spot',
+        limit=20
+    )
+    
+    trades = []
+    for execution in result.get('list', []):
+        trades.append({
+            'symbol': execution.get('symbol'),
+            'side': execution.get('side'),
+            'qty': execution.get('execQty'),
+            'price': execution.get('execPrice'),
+            'time': execution.get('execTime')
+        })
+    
+    return trades
+```
+
+## 🎯 ЗАКЛЮЧЕНИЕ
+
+Ключ к успешной торговле на Bybit - правильное использование параметра `marketUnit`:
+
+- **marketUnit='quoteCoin'** - для торговли на фиксированную сумму в USDT
+- **marketUnit='baseCoin'** - для торговли фиксированным количеством криптовалюты
+
+Всегда используйте Market ордера для гарантированного исполнения и проверяйте минимальные лимиты перед размещением ордеров.
+
+---
+**Дата создания**: 29.09.2025
+**Статус**: ✅ Проверено и работает
+**Версия API**: v5

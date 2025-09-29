@@ -74,6 +74,9 @@ class BybitClient:
             'Content-Type': 'application/json',
             'User-Agent': 'TradingBot/1.0'
         })
+        
+        # Устанавливаем кодировку для избежания ошибок с кириллицей
+        self.session.encoding = 'utf-8'
     
     def _generate_signature(self, timestamp: str, payload: str) -> str:
         """Генерация подписи для запроса согласно спецификации Bybit V5
@@ -137,13 +140,14 @@ class BybitClient:
         # Генерация подписи
         signature = self._generate_signature(timestamp, payload)
         
-        # Заголовки
+        # Заголовки (убираем кириллицу из User-Agent)
         headers = {
-            'X-BAPI-API-KEY': self.api_key,
+            'X-BAPI-API-KEY': self.api_key.strip(),
             'X-BAPI-TIMESTAMP': timestamp,
             'X-BAPI-SIGN': signature,
             'X-BAPI-RECV-WINDOW': str(self.recv_window),
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'User-Agent': 'TradingBot/1.0'
         }
         
         try:
@@ -329,39 +333,51 @@ class BybitClient:
            {
              'total_wallet_usd': Decimal,
              'total_available_usd': Decimal,
-             'coins': { 'USDT': Decimal, 'BTC': Decimal, ... }
+             'coins': [{'coin': str, 'walletBalance': str, 'usdValue': str, ...}, ...]
            }
         """
-        out = {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+        out = {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': []}
         try:
             # Проверяем, что получили корректный ответ
-            if not resp or 'result' not in resp:
+            if not resp or 'list' not in resp:
                 self.logger.warning("Получен пустой или некорректный ответ при запросе баланса")
                 return out
                 
             # Проверяем, что есть список аккаунтов
-            if 'list' not in resp['result'] or not resp['result']['list']:
+            if not resp['list']:
                 self.logger.warning(f"Нет данных о балансе в ответе API")
                 return out
                 
-            acc = resp['result']['list'][0]
+            acc = resp['list'][0]
             out['total_wallet_usd'] = Decimal(str(acc.get('totalWalletBalance', '0')))
             out['total_available_usd'] = Decimal(str(acc.get('totalAvailableBalance', '0')))
             
             # Логируем полный ответ для отладки
             self.logger.info(f"Полный ответ баланса: {acc}")
             
+            # Сохраняем все монеты как список для дальнейшей обработки
+            coins_list = []
             for c in acc.get('coin', []):
                 coin = c.get('coin')
                 # Используем walletBalance для получения точного количества монеты
                 bal = Decimal(str(c.get('walletBalance', '0')))
                 if coin:
-                    out['coins'][coin] = bal
+                    coin_data = {
+                        'coin': coin,
+                        'walletBalance': str(bal),
+                        'usdValue': c.get('usdValue', '0'),
+                        'equity': c.get('equity', '0'),
+                        'locked': c.get('locked', '0'),
+                        'bonus': c.get('bonus', '0'),
+                        'cumRealisedPnl': c.get('cumRealisedPnl', '0')
+                    }
+                    coins_list.append(coin_data)
                     # Логируем каждую монету отдельно для отладки
                     self.logger.info(f"Монета {coin}: walletBalance={bal}, usdValue={c.get('usdValue', '0')}")
             
+            out['coins'] = coins_list
             self.logger.info(f"Обработан баланс: {len(out['coins'])} монет, всего: {out['total_wallet_usd']} USD")
-            self.logger.info(f"Детальный баланс монет: {out['coins']}")
+            self.logger.info(f"Детальный баланс монет: {[c['coin'] + ':' + c['walletBalance'] for c in coins_list]}")
         except Exception as e:
             self.logger.error(f"Ошибка обработки баланса: {e}")
             import traceback

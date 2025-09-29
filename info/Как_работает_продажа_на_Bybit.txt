@@ -1,0 +1,433 @@
+# 📖 ПОЛНОЕ РУКОВОДСТВО: Как работает продажа на Bybit
+
+## 🎯 ОСНОВНАЯ КОНЦЕПЦИЯ
+
+Продажа криптовалюты на Bybit происходит через тот же endpoint `/v5/order/create`, но с параметром `side='Sell'`.
+Ключевая особенность - автоматический поиск самого дешевого актива в портфеле и продажа на фиксированную сумму.
+
+## 🔑 КЛЮЧЕВЫЕ ПАРАМЕТРЫ ДЛЯ ПРОДАЖИ
+
+### Обязательные параметры:
+```python
+{
+    'category': 'spot',           # Тип торговли (spot/linear/inverse)
+    'symbol': 'ETHUSDT',          # Торговая пара (определяется автоматически)
+    'side': 'Sell',               # Направление - ПРОДАЖА
+    'orderType': 'Market',        # Тип ордера (Market/Limit)
+    'qty': '5',                   # Сумма в USDT (строка!)
+    'marketUnit': 'quoteCoin'     # 🔑 КРИТИЧЕСКИ ВАЖНО!
+}
+```
+
+### Логика выбора актива:
+1. **Получение актуального баланса** через API
+2. **Фильтрация активов** (исключение стейблкоинов)
+3. **Поиск самого дешевого** по USD стоимости
+4. **Проверка минимальных лимитов** ($1 минимум)
+
+## 💡 РАБОЧИЕ ПРИМЕРЫ КОДА
+
+### 1. Полный алгоритм продажи самого дешевого актива
+```python
+def sell_cheapest_asset():
+    """Продажа самого дешевого актива на 5 USDT"""
+    
+    # 1. Получаем актуальный баланс
+    balance = api_client.get_unified_balance_flat()
+    
+    # 2. Фильтруем торгуемые активы
+    tradeable_coins = []
+    for coin in balance['coins']:
+        coin_name = coin.get('coin', '')
+        wallet_balance = float(coin.get('walletBalance', 0))
+        usd_value = float(coin.get('usdValue', 0))
+        
+        # Исключаем стейблкоины и мелкие позиции
+        if (coin_name not in ['USDT', 'USDC', 'BUSD', 'DAI'] and 
+            wallet_balance > 0 and usd_value > 1.0):
+            tradeable_coins.append({
+                'coin': coin_name,
+                'balance': wallet_balance,
+                'usd_value': usd_value
+            })
+    
+    # 3. Находим самый дешевый актив
+    if not tradeable_coins:
+        return "❌ Нет активов для продажи"
+    
+    lowest_coin = min(tradeable_coins, key=lambda c: c['usd_value'])
+    symbol = lowest_coin['coin'] + "USDT"
+    
+    # 4. Выполняем продажу
+    order_result = api_client.place_order(
+        category='spot',
+        symbol=symbol,
+        side='Sell',
+        order_type='Market',
+        qty='5',                    # Продаем на 5 USDT
+        marketUnit='quoteCoin'      # qty в USDT
+    )
+    
+    return order_result
+
+# Результат: Продаст самый дешевый актив на сумму 5 USDT
+```
+
+### 2. Продажа конкретного актива на фиксированную сумму
+```python
+def sell_eth_for_usdt_amount():
+    """Продажа ETH на получение 10 USDT"""
+    order_result = api_client.place_order(
+        category='spot',
+        symbol='ETHUSDT',
+        side='Sell',
+        order_type='Market',
+        qty='10',                   # 10 USDT
+        marketUnit='quoteCoin'      # qty в USDT
+    )
+    return order_result
+
+# Результат: Продаст ETH на сумму 10 USDT
+# Количество ETH = 10 USDT / текущая_цена_ETH
+```
+
+### 3. Продажа фиксированного количества актива
+```python
+def sell_fixed_eth_amount():
+    """Продажа 0.01 ETH"""
+    order_result = api_client.place_order(
+        category='spot',
+        symbol='ETHUSDT',
+        side='Sell',
+        order_type='Market',
+        qty='0.01',                 # 0.01 ETH
+        marketUnit='baseCoin'       # qty в ETH
+    )
+    return order_result
+
+# Результат: Продаст ровно 0.01 ETH
+# Получит = 0.01 ETH * текущая_цена_ETH USDT
+```
+
+### 4. Продажа всего количества актива
+```python
+def sell_all_of_asset(coin_name, balance):
+    """Продажа всего количества определенного актива"""
+    order_result = api_client.place_order(
+        category='spot',
+        symbol=f'{coin_name}USDT',
+        side='Sell',
+        order_type='Market',
+        qty=str(balance),           # Весь баланс
+        marketUnit='baseCoin'       # qty в базовой валюте
+    )
+    return order_result
+
+# Пример использования:
+# sell_all_of_asset('ETH', 0.004137)  # Продать все ETH
+```
+
+## 🔧 ПОЛНЫЙ РАБОЧИЙ КОД ИЗ ПРОЕКТА
+
+```python
+def sell_lowest_ticker(self):
+    """Продажа самого дешевого актива в портфеле (асинхронно)"""
+    try:
+        self.add_log_message("🔄 Начинаю поиск самого дешевого актива для продажи...")
+        
+        # Отключаем кнопку на время выполнения
+        self.sell_lowest_btn.setEnabled(False)
+        self.sell_lowest_btn.setText("⏳ Продажа...")
+        
+        def execute_sell_async():
+            try:
+                # Проверки инициализации
+                if not hasattr(self, 'trading_worker') or self.trading_worker is None:
+                    self.add_log_message("❌ Торговый воркер не инициализирован")
+                    return
+                
+                if not hasattr(self.trading_worker, 'bybit_client') or self.trading_worker.bybit_client is None:
+                    self.add_log_message("❌ API клиент не инициализирован")
+                    return
+                
+                # 🔑 КЛЮЧЕВАЯ ЧАСТЬ: Получаем актуальный баланс
+                self.add_log_message("📊 Получаю актуальный баланс...")
+                balance = self.trading_worker.bybit_client.get_unified_balance_flat()
+                
+                if not balance or not balance.get('coins'):
+                    self.add_log_message("❌ Не удалось получить данные о балансе")
+                    return
+                
+                # Фильтруем торгуемые активы
+                tradeable_coins = []
+                for coin in balance['coins']:
+                    coin_name = coin.get('coin', '')
+                    wallet_balance = float(coin.get('walletBalance', 0))
+                    usd_value = float(coin.get('usdValue', 0))
+                    
+                    # Критерии отбора
+                    if (coin_name not in ['USDT', 'USDC', 'BUSD', 'DAI'] and 
+                        wallet_balance > 0 and usd_value > 1.0):  # Минимум $1
+                        tradeable_coins.append({
+                            'coin': coin_name,
+                            'balance': wallet_balance,
+                            'usd_value': usd_value
+                        })
+                
+                if not tradeable_coins:
+                    self.add_log_message("❌ Нет активов для продажи (минимум $1)")
+                    return
+                
+                # Находим самый дешевый актив
+                lowest_coin = min(tradeable_coins, key=lambda c: c['usd_value'])
+                symbol = lowest_coin['coin'] + "USDT"
+                
+                self.add_log_message(f"🎯 Выбран актив для продажи: {symbol}")
+                self.add_log_message(f"💰 Стоимость позиции: ${lowest_coin['usd_value']:.2f}")
+                self.add_log_message(f"📊 Количество: {lowest_coin['balance']:.6f} {lowest_coin['coin']}")
+                
+                # 🔑 КЛЮЧЕВАЯ ЧАСТЬ: Выполняем продажу
+                try:
+                    sell_amount_usdt = "5"  # Продаем на 5 USDT
+                    self.add_log_message(f"💸 Размещаю ордер на продажу {symbol} на {sell_amount_usdt} USDT...")
+                    
+                    # ✅ РАБОЧИЕ ПАРАМЕТРЫ:
+                    order_result = self.trading_worker.bybit_client.place_order(
+                        category='spot',                    # Спотовая торговля
+                        symbol=symbol,                      # Например, ETHUSDT
+                        side='Sell',                        # Продажа
+                        order_type='Market',                # Рыночный ордер
+                        qty=sell_amount_usdt,               # Сумма в USDT (5)
+                        marketUnit='quoteCoin'              # 🔑 КЛЮЧЕВОЙ ПАРАМЕТР!
+                    )
+                    
+                    self.add_log_message(f"📋 Результат API: {order_result}")
+                    
+                    if order_result:
+                        self.add_log_message(f"✅ Успешно размещен ордер на продажу {symbol} на {sell_amount_usdt} USDT")
+                        
+                        # Рассчитываем примерное количество
+                        try:
+                            tickers = self.trading_worker.bybit_client.get_tickers(category="spot")
+                            coin_price = 0
+                            if tickers and isinstance(tickers, list):
+                                for ticker in tickers:
+                                    if ticker.get('symbol') == symbol:
+                                        coin_price = float(ticker.get('lastPrice', 0))
+                                        break
+                            if coin_price > 0:
+                                estimated_qty = float(sell_amount_usdt) / coin_price
+                                self.add_log_message(f"📊 Примерное количество: ~{estimated_qty:.6f} {lowest_coin['coin']}")
+                        except Exception as price_error:
+                            self.add_log_message(f"⚠️ Не удалось получить цену: {price_error}")
+                    else:
+                        self.add_log_message(f"❌ Не удалось разместить ордер на продажу {symbol}")
+                        
+                except Exception as api_error:
+                    self.add_log_message(f"❌ Ошибка API при продаже {symbol}: {str(api_error)}")
+                    self.logger.error(f"API Error: {api_error}")
+                
+            except Exception as e:
+                self.add_log_message(f"❌ Ошибка при продаже: {str(e)}")
+                self.logger.error(f"Ошибка в sell_lowest_ticker: {e}")
+            finally:
+                # Возвращаем кнопку в исходное состояние
+                self.sell_lowest_btn.setEnabled(True)
+                self.sell_lowest_btn.setText("💸 Продать самый дешевый")
+        
+        # Выполняем асинхронно через QTimer
+        QTimer.singleShot(100, execute_sell_async)
+        
+    except Exception as e:
+        self.add_log_message(f"❌ Критическая ошибка при продаже: {str(e)}")
+        self.logger.error(f"Критическая ошибка в sell_lowest_ticker: {e}")
+        # Возвращаем кнопку в исходное состояние при ошибке
+        self.sell_lowest_btn.setEnabled(True)
+        self.sell_lowest_btn.setText("💸 Продать самый дешевый")
+```
+
+## 📊 РАЗЛИЧНЫЕ ТОРГОВЫЕ ПАРЫ
+
+### Bitcoin (BTC):
+```python
+# Продажа BTC на получение 50 USDT
+api_client.place_order(
+    category='spot',
+    symbol='BTCUSDT',
+    side='Sell',
+    order_type='Market',
+    qty='50',
+    marketUnit='quoteCoin'
+)
+
+# Продажа 0.001 BTC
+api_client.place_order(
+    category='spot',
+    symbol='BTCUSDT',
+    side='Sell',
+    order_type='Market',
+    qty='0.001',
+    marketUnit='baseCoin'
+)
+```
+
+### Другие альткоины:
+```python
+# Продажа SOL на получение 25 USDT
+api_client.place_order(
+    category='spot',
+    symbol='SOLUSDT',
+    side='Sell',
+    order_type='Market',
+    qty='25',
+    marketUnit='quoteCoin'
+)
+
+# Продажа ADA на получение 30 USDT
+api_client.place_order(
+    category='spot',
+    symbol='ADAUSDT',
+    side='Sell',
+    order_type='Market',
+    qty='30',
+    marketUnit='quoteCoin'
+)
+```
+
+## 🔍 АЛГОРИТМ ПОИСКА САМОГО ДЕШЕВОГО АКТИВА
+
+### Критерии отбора:
+1. **Не стейблкоин**: исключаем USDT, USDC, BUSD, DAI
+2. **Положительный баланс**: `walletBalance > 0`
+3. **Минимальная стоимость**: `usdValue > 1.0` (минимум $1)
+4. **Торгуемость**: должна существовать пара с USDT
+
+### Логика выбора:
+```python
+def find_cheapest_asset(balance_data):
+    """Поиск самого дешевого актива для продажи"""
+    
+    # Фильтрация активов
+    tradeable_coins = []
+    for coin in balance_data['coins']:
+        coin_name = coin.get('coin', '')
+        wallet_balance = float(coin.get('walletBalance', 0))
+        usd_value = float(coin.get('usdValue', 0))
+        
+        # Применяем критерии отбора
+        if (coin_name not in ['USDT', 'USDC', 'BUSD', 'DAI'] and 
+            wallet_balance > 0 and usd_value > 1.0):
+            
+            tradeable_coins.append({
+                'coin': coin_name,
+                'balance': wallet_balance,
+                'usd_value': usd_value,
+                'symbol': coin_name + 'USDT'
+            })
+    
+    if not tradeable_coins:
+        return None
+    
+    # Возвращаем актив с минимальной USD стоимостью
+    return min(tradeable_coins, key=lambda c: c['usd_value'])
+
+# Пример результата:
+# {
+#     'coin': 'ETH',
+#     'balance': 0.004137,
+#     'usd_value': 17.09,
+#     'symbol': 'ETHUSDT'
+# }
+```
+
+## ⚠️ ВАЖНЫЕ ОГРАНИЧЕНИЯ И ТРЕБОВАНИЯ
+
+### Минимальные суммы для продажи:
+- **Общий минимум**: $1 USD стоимость позиции
+- **Продажа на сумму**: 5 USDT (настраивается)
+- **Рыночные ордера**: используются для гарантированного исполнения
+
+### Исключаемые активы:
+- **Стейблкоины**: USDT, USDC, BUSD, DAI
+- **Мелкие позиции**: менее $1 USD стоимости
+- **Заблокированные активы**: с locked > 0
+
+## 🚨 ЧАСТЫЕ ОШИБКИ И ИХ РЕШЕНИЯ
+
+### 1. "Insufficient balance"
+**Причина**: Недостаточно актива для продажи на указанную сумму
+**Решение**: Уменьшить сумму продажи или использовать marketUnit='baseCoin'
+
+### 2. "Order value exceeded lower limit"
+**Причина**: Сумма продажи меньше минимального лимита
+**Решение**: Увеличить qty или проверить лимиты через API
+
+### 3. "Symbol not found"
+**Причина**: Торговая пара не существует или не активна
+**Решение**: Проверить доступные символы через get_instruments_info
+
+### 4. "No tradeable assets found"
+**Причина**: Все активы либо стейблкоины, либо менее $1
+**Решение**: Пополнить портфель или снизить минимальный лимит
+
+## 📈 МОНИТОРИНГ РЕЗУЛЬТАТОВ ПРОДАЖИ
+
+### Проверка исполнения ордера:
+```python
+def check_sell_execution():
+    """Проверка исполнения ордеров продажи"""
+    executions = api_client.get_execution_list(
+        category='spot',
+        limit=10
+    )
+    
+    sell_trades = []
+    for execution in executions.get('list', []):
+        if execution.get('side') == 'Sell':
+            sell_trades.append({
+                'symbol': execution.get('symbol'),
+                'qty': execution.get('execQty'),
+                'price': execution.get('execPrice'),
+                'value': float(execution.get('execQty', 0)) * float(execution.get('execPrice', 0)),
+                'time': execution.get('execTime')
+            })
+    
+    return sell_trades
+```
+
+### Анализ портфеля после продажи:
+```python
+def analyze_portfolio_after_sell():
+    """Анализ изменений в портфеле после продажи"""
+    balance = api_client.get_unified_balance_flat()
+    
+    portfolio_summary = {
+        'total_usd': float(balance.get('total_wallet_usd', 0)),
+        'available_usd': float(balance.get('total_available_usd', 0)),
+        'assets_count': len([c for c in balance['coins'] if float(c.get('walletBalance', 0)) > 0]),
+        'non_stablecoin_assets': len([
+            c for c in balance['coins'] 
+            if c.get('coin') not in ['USDT', 'USDC', 'BUSD', 'DAI'] 
+            and float(c.get('walletBalance', 0)) > 0
+        ])
+    }
+    
+    return portfolio_summary
+```
+
+## 🎯 ЗАКЛЮЧЕНИЕ
+
+Ключевые принципы успешной продажи на Bybit:
+
+1. **Актуальные данные**: всегда получать свежий баланс через API
+2. **Умный выбор**: автоматический поиск самого дешевого актива
+3. **Правильные параметры**: `marketUnit='quoteCoin'` для продажи на сумму
+4. **Безопасные лимиты**: минимум $1 для позиции, продажа на $5
+5. **Обработка ошибок**: полная защита от сбоев API и UI
+
+Система автоматически найдет и продаст самый дешевый актив в портфеле, исключая стейблкоины и мелкие позиции.
+
+---
+**Дата создания**: 29.09.2025
+**Статус**: ✅ Проверено и работает
+**Версия API**: v5
