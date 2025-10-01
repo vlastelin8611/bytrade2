@@ -180,14 +180,14 @@ class TickerViewerApp:
             self.historical_data = data['historical_data']
             last_update = datetime.datetime.fromtimestamp(data['timestamp'])
             
-            logger.info(f"Загружены сохраненные данные тикеров. Последнее обновление: {last_update}")
-            self.status_var.set(f"Загружены сохраненные данные. Последнее обновление: {last_update}")
+            logger.info("Загружены сохраненные данные тикеров. Последнее обновление: {}".format(last_update))
+            self.status_var.set("Загружены сохраненные данные. Последнее обновление: {}".format(last_update))
             
             # Обновляем интерфейс
             self.update_ticker_table(self.tickers_data)
             
         except Exception as e:
-            logger.error(f"Ошибка при загрузке сохраненных данных: {e}")
+            logger.error("Ошибка при загрузке сохраненных данных: {}".format(e))
     
     def save_tickers_data(self):
         """Сохранение данных тикеров в файл для использования основной программой"""
@@ -205,10 +205,10 @@ class TickerViewerApp:
             with open(data_path, 'w', encoding='utf-8') as f:
                 json.dump(save_data, f, indent=2, default=str)
             
-            logger.info(f"Данные тикеров сохранены в {data_path}")
+            logger.info("Данные тикеров сохранены в {}".format(data_path))
             return True
         except Exception as e:
-            logger.error(f"Ошибка при сохранении данных тикеров: {e}")
+            logger.error("Ошибка при сохранении данных тикеров: {}".format(e))
             return False
             
     def update_tickers_thread(self):

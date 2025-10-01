@@ -55,7 +55,7 @@ try:
     from gui.portfolio_tab import PortfolioTab
     from tools.ticker_data_loader import TickerDataLoader
 except ImportError as e:
-    print(f"Ошибка импорта модулей: {e}")
+    print("Ошибка импорта модулей: {}".format(e))
     print("Убедитесь, что все файлы находятся в правильных директориях")
     sys.exit(1)
 
@@ -76,7 +76,7 @@ class TradingWorker(QThread):
         self.api_secret = api_secret
         self.testnet = testnet
         self.running = False
-        self.trading_enabled = False
+        self.trading_enabled = False  # Возвращено: торговля отключена по умолчанию, требует ручного включения
         self._mutex = QMutex()
         
         # Инициализация компонентов
@@ -99,7 +99,7 @@ class TradingWorker(QThread):
         log_dir = Path(__file__).parent / 'logs'
         log_dir.mkdir(exist_ok=True)  # Создаем папку, если не существует
         
-        log_file = log_dir / f'trading_bot_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+        log_file = log_dir / 'trading_bot_{}.log'.format(datetime.now().strftime("%Y%m%d_%H%M%S"))
         
         logging.basicConfig(
             level=logging.INFO,
@@ -110,11 +110,11 @@ class TradingWorker(QThread):
             ]
         )
         self.logger = logging.getLogger(__name__)
-        self.logger.info(f"Логи сохраняются в файл: {log_file}")
+        self.logger.info("Логи сохраняются в файл: {}".format(log_file))
     
     def run(self):
         """Основной цикл торгового потока"""
-        session_id = f"session_{int(time.time())}"
+        session_id = "session_{}".format(int(time.time()))
         
         try:
             self.running = True
@@ -280,7 +280,7 @@ class TradingWorker(QThread):
                     self.msleep(5000)  # 5 секунд
                     
                 except Exception as e:
-                    error_msg = f"Ошибка в торговом цикле: {e}"
+                    error_msg = "Ошибка в торговом цикле: {}".format(e)
                     self.logger.error(error_msg)
                     self.error_occurred.emit(error_msg)
                     
@@ -293,10 +293,14 @@ class TradingWorker(QThread):
                     #     'exception': traceback.format_exc()
                     # })
                     
+                    # Продолжаем работу после ошибки, не отключая торговлю
+                    print("⚠️ Ошибка в цикле #{}: {}".format(cycle_count, error_msg))
+                    print("🔄 Продолжаем работу через 10 секунд...")
                     self.msleep(10000)  # 10 секунд при ошибке
                     
         except Exception as e:
-            error_msg = f"Критическая ошибка торгового потока: {e}"
+            # Критическая ошибка - останавливаем поток
+            error_msg = "Критическая ошибка торгового потока: {}".format(e)
             self.logger.error(error_msg)
             self.error_occurred.emit(error_msg)
             
@@ -309,11 +313,15 @@ class TradingWorker(QThread):
                 #     'exception': traceback.format_exc()
                 # })
                 pass
-        finally:
+            
+            # Только при критической ошибке останавливаем поток
             self.running = False
             self.status_updated.emit("Отключено")
-            self.log_message.emit("Торговый поток остановлен")
-            
+            self.log_message.emit("Торговый поток остановлен из-за критической ошибки")
+        
+        # Этот блок выполняется только при нормальном завершении или критической ошибке
+        if not self.running:
+            print("🛑 Торговый поток завершен")
             if self.db_manager:
                 # Временно закомментировано из-за блокировки
                 # self.db_manager.log_entry({
@@ -535,87 +543,60 @@ class TradingWorker(QThread):
             self.logger.error(f"Детали ошибки: {traceback.format_exc()}")
     
     def _process_symbols_async(self, symbols: List[str], session_id: str, cycle_start: float):
-        """Асинхронная обработка символов"""
+        """Синхронная обработка символов"""
         if not symbols:
             cycle_time = (time.time() - cycle_start) * 1000
             self.logger.info(f"Торговый цикл завершен за {cycle_time:.2f} мс")
             return
         
-        # Берем первый символ из списка
-        symbol = symbols[0]
-        remaining_symbols = symbols[1:]
-        
-        try:
-            self.logger.info(f"Анализ символа: {symbol}")
-            
-            # Запускаем анализ символа асинхронно
-            def analyze_and_continue():
-                try:
-                    # Получение исторических данных
-                    klines = self._get_symbol_klines(symbol)
-                    if not klines:
-                        self.logger.warning(f"Не удалось получить данные для {symbol}")
-                        # Переходим к следующему символу
-                        QTimer.singleShot(100, lambda: self._process_symbols_async(remaining_symbols, session_id, cycle_start))
-                        return
-                    
-                    # ML анализ
-                    market_data = {
-                        'symbol': symbol,
-                        'klines': klines,
-                        'current_price': float(klines[-1]['close']) if klines else 0.0
-                    }
-                    
-                    analysis_result = self.ml_strategy.analyze_market(market_data)
-                    
-                    if not analysis_result:
-                        self.logger.warning(f"Не получен результат анализа для {symbol}")
-                        # Переходим к следующему символу
-                        QTimer.singleShot(100, lambda: self._process_symbols_async(remaining_symbols, session_id, cycle_start))
-                        return
+        # Обрабатываем символы синхронно
+        for symbol in symbols:
+            try:
+                self.logger.info(f"Анализ символа: {symbol}")
+                
+                # Анализируем символ синхронно
+                analysis_result = self._analyze_symbol(symbol, session_id)
+                
+                if not analysis_result:
+                    self.logger.warning(f"Не получен результат анализа для {symbol}")
+                    continue
+                
+                signal = analysis_result.get('signal')
+                confidence = analysis_result.get('confidence', 0)
+                
+                if signal and signal in ['BUY', 'SELL']:
+                    # Проверка лимитов
+                    if self._check_daily_limits(analysis_result):
+                        self.logger.info(f"Выполнение торговой операции для {symbol} с сигналом {signal}")
+                        trade_result = self._execute_trade(symbol, analysis_result, session_id)
                         
-                    self.logger.info(f"Результат анализа {symbol}: сигнал={analysis_result.get('signal', 'НЕТ')}, уверенность={analysis_result.get('confidence', 0)}")
-                    
-                    if analysis_result and analysis_result.get('signal') in ['BUY', 'SELL']:
-                        # Проверка лимитов
-                        if self._check_daily_limits(analysis_result):
-                            self.logger.info(f"Выполнение торговой операции для {symbol} с сигналом {analysis_result.get('signal')}")
-                            trade_result = self._execute_trade(symbol, analysis_result, session_id)
+                        if trade_result:
+                            self.logger.info(f"Успешная торговая операция: {trade_result}")
+                            self.trade_executed.emit(trade_result)
                             
-                            if trade_result:
-                                self.logger.info(f"Успешная торговая операция: {trade_result}")
-                                self.trade_executed.emit(trade_result)
-                                
-                                # Обновление дневной статистики
-                                self.daily_volume += float(trade_result.get('size', 0))
-                                self.logger.info(f"Обновлена дневная статистика: объем={self.daily_volume}")
-                                
-                                # Обучение стратегии на результатах
-                                self.logger.info(f"Обновление производительности стратегии для {symbol}")
-                                self.ml_strategy.update_performance(symbol, trade_result)
-                            else:
-                                self.logger.warning(f"Торговая операция для {symbol} не выполнена")
+                            # Обновление дневной статистики
+                            self.daily_volume += float(trade_result.get('size', 0))
+                            self.logger.info(f"Обновлена дневная статистика: объем={self.daily_volume}")
+                            
+                            # Обучение стратегии на результатах
+                            self.logger.info(f"Обновление производительности стратегии для {symbol}")
+                            self.ml_strategy.update_performance(symbol, trade_result)
                         else:
-                            self.logger.warning(f"Превышены дневные лимиты для {symbol}")
+                            self.logger.warning(f"Торговая операция для {symbol} не выполнена")
                     else:
-                        self.logger.info(f"Нет торгового сигнала для {symbol} или сигнал не BUY/SELL")
-                    
-                    # Переходим к следующему символу с небольшой задержкой
-                    QTimer.singleShot(500, lambda: self._process_symbols_async(remaining_symbols, session_id, cycle_start))
-                    
-                except Exception as e:
-                    self.logger.error(f"Ошибка анализа символа {symbol}: {e}")
-                    self.logger.error(f"Детали ошибки: {traceback.format_exc()}")
-                    # Переходим к следующему символу даже при ошибке
-                    QTimer.singleShot(100, lambda: self._process_symbols_async(remaining_symbols, session_id, cycle_start))
-            
-            # Запускаем анализ асинхронно
-            QTimer.singleShot(0, analyze_and_continue)
-            
-        except Exception as e:
-            self.logger.error(f"Ошибка обработки символа {symbol}: {e}")
-            # Переходим к следующему символу
-            QTimer.singleShot(100, lambda: self._process_symbols_async(remaining_symbols, session_id, cycle_start))
+                        self.logger.warning(f"Превышены дневные лимиты для {symbol}")
+                
+                # Небольшая пауза между анализами символов
+                self.msleep(100)
+                
+            except Exception as e:
+                self.logger.error(f"Ошибка анализа символа {symbol}: {e}")
+                self.logger.error(f"Детали ошибки: {traceback.format_exc()}")
+                continue
+        
+        # Завершение цикла
+        cycle_time = (time.time() - cycle_start) * 1000
+        self.logger.info(f"Торговый цикл завершен за {cycle_time:.2f} мс")
     
     def _get_symbol_klines(self, symbol: str) -> Optional[List[dict]]:
         """Получение исторических данных для символа"""
@@ -729,7 +710,7 @@ class TradingWorker(QThread):
         return final_symbols  # Возвращаем все доступные символы без ограничений
     
     def _analyze_symbol(self, symbol: str, session_id: str) -> Optional[dict]:
-        """Анализ конкретного символа (асинхронно)"""
+        """Анализ конкретного символа (синхронно)"""
         try:
             start_time = time.time()
             
@@ -743,84 +724,80 @@ class TradingWorker(QThread):
                 self.logger.error(f"Невозможно анализировать символ {symbol}: ML стратегия не инициализирована")
                 return None
             
-            # Используем QTimer для неблокирующего выполнения
-            def analyze_async():
-                try:
-                    # Получение исторических данных с обработкой ошибки Invalid period
+            # Получение исторических данных с обработкой ошибки Invalid period
+            try:
+                klines = self.bybit_client.get_kline(
+                    category='spot',
+                    symbol=symbol,
+                    interval='4h',
+                    limit=200
+                )
+            except Exception as kline_error:
+                if "Invalid period" in str(kline_error):
+                    self.logger.warning(f"Символ {symbol}: ошибка периода, пробуем альтернативный интервал")
+                    # Пробуем альтернативный интервал
                     try:
                         klines = self.bybit_client.get_kline(
                             category='spot',
                             symbol=symbol,
-                            interval='4h',
+                            interval='60',  # Альтернативный формат для 1h
                             limit=200
                         )
-                    except Exception as kline_error:
-                        if "Invalid period" in str(kline_error):
-                            self.logger.warning(f"Символ {symbol}: ошибка периода, пробуем альтернативный интервал")
-                            # Пробуем альтернативный интервал
-                            try:
-                                klines = self.bybit_client.get_kline(
-                                    category='spot',
-                                    symbol=symbol,
-                                    interval='60',  # Альтернативный формат для 1h
-                                    limit=200
-                                )
-                            except Exception as alt_error:
-                                self.logger.error(f"Не удалось получить данные для {symbol} с альтернативным интервалом: {alt_error}")
-                                return None
-                        else:
-                            self.logger.error(f"Ошибка получения данных для {symbol}: {kline_error}")
-                            return None
-                    
-                    if not klines or len(klines) < 10:  # Проверка минимального количества свечей для анализа
-                        self.logger.warning(f"Недостаточно данных для анализа символа {symbol}: получено {len(klines) if klines else 0} свечей")
+                    except Exception as alt_error:
+                        self.logger.error(f"Не удалось получить данные для {symbol} с альтернативным интервалом: {alt_error}")
                         return None
-                    
-                    # ML анализ с обработкой ошибок
-                    try:
-                        # Формируем словарь данных для анализа
-                        market_data = {
-                            'symbol': symbol,
-                            'klines': klines,
-                            'current_price': float(klines[-1]['close']) if klines and len(klines) > 0 else 0.0
-                        }
-                        analysis = self.ml_strategy.analyze_market(market_data)
-                    except Exception as ml_error:
-                        self.logger.error(f"Ошибка ML анализа для {symbol}: {ml_error}")
-                        return None
-                    
-                    exec_time = (time.time() - start_time) * 1000
-                    
-                    # Логирование анализа
-                    if analysis:
-                        analysis_data = {
-                            'symbol': symbol,
-                            'timeframe': '4h',
-                            'current_price': klines[-1].get('close') if klines else 0,
-                            'features': analysis.get('features', []),
-                            'indicators': analysis.get('indicators', {}),
-                            'regime': analysis.get('regime', {}),
-                            'prediction': analysis.get('prediction', {}),
-                            'signal': analysis.get('signal'),
-                            'confidence': analysis.get('confidence'),
-                            'execution_time_ms': exec_time
-                        }
-                        
-                        try:
-                            if hasattr(self, 'db_manager') and self.db_manager is not None:
-                                self.db_manager.log_analysis(analysis_data)
-                        except Exception as db_error:
-                            self.logger.error(f"Ошибка записи анализа в БД для {symbol}: {db_error}")
-                    
-                    return analysis
-                    
-                except Exception as e:
-                    self.logger.error(f"Ошибка асинхронного анализа символа {symbol}: {e}")
+                else:
+                    self.logger.error(f"Ошибка получения данных для {symbol}: {kline_error}")
                     return None
             
-            # Выполняем асинхронно через QTimer
-            QTimer.singleShot(0, analyze_async)
-            return None  # Результат будет обработан в торговом цикле
+            if not klines or len(klines) < 10:  # Проверка минимального количества свечей для анализа
+                self.logger.warning(f"Недостаточно данных для анализа символа {symbol}: получено {len(klines) if klines else 0} свечей")
+                return None
+            
+            # ML анализ с обработкой ошибок
+            try:
+                # Формируем словарь данных для анализа
+                market_data = {
+                    'symbol': symbol,
+                    'klines': klines,
+                    'current_price': float(klines[-1]['close']) if klines and len(klines) > 0 else 0.0
+                }
+                analysis = self.ml_strategy.analyze_market(market_data)
+            except Exception as ml_error:
+                self.logger.error(f"Ошибка ML анализа для {symbol}: {ml_error}")
+                return None
+            
+            exec_time = (time.time() - start_time) * 1000
+            
+            # Логирование результата анализа
+            if analysis:
+                signal = analysis.get('signal')
+                confidence = analysis.get('confidence', 0)
+                self.logger.info(f"Результат анализа {symbol}: сигнал={signal}, уверенность={confidence:.1f}")
+                
+                if not signal or signal not in ['BUY', 'SELL']:
+                    self.logger.info(f"Нет торгового сигнала для {symbol} или сигнал не BUY/SELL")
+                
+                analysis_data = {
+                    'symbol': symbol,
+                    'timeframe': '4h',
+                    'current_price': klines[-1].get('close') if klines else 0,
+                    'features': analysis.get('features', []),
+                    'indicators': analysis.get('indicators', {}),
+                    'regime': analysis.get('regime', {}),
+                    'prediction': analysis.get('prediction', {}),
+                    'signal': signal,
+                    'confidence': confidence,
+                    'execution_time_ms': exec_time
+                }
+                
+                try:
+                    if hasattr(self, 'db_manager') and self.db_manager is not None:
+                        self.db_manager.log_analysis(analysis_data)
+                except Exception as db_error:
+                    self.logger.error(f"Ошибка записи анализа в БД для {symbol}: {db_error}")
+            
+            return analysis
             
         except Exception as e:
             self.logger.error(f"Ошибка анализа символа {symbol}: {e}")
@@ -851,7 +828,7 @@ class TradingWorker(QThread):
             
             # Проверка минимальной уверенности
             confidence = analysis.get('confidence', 0)
-            if confidence < 0.65:  # Повышенный порог уверенности
+            if confidence < 0.3:  # Снижен с 0.65 до 0.3 для соответствия ML стратегии
                 return False
             
             return True
@@ -1025,6 +1002,13 @@ class TradingWorker(QThread):
             status = "включена" if enabled else "выключена"
             self.log_message.emit(f"🔄 Торговля {status}")
             
+            # Обновляем статус только при включении торговли
+            if enabled:
+                self.status_updated.emit("Работает")
+                print(f"✅ Торговля включена, статус: Работает")
+            else:
+                print(f"⏸️ Торговля выключена, но поток продолжает работать")
+            
             if self.db_manager:
                 pass
                 # self.db_manager.log_entry({
@@ -1041,8 +1025,14 @@ class TradingWorker(QThread):
         self._mutex.lock()
         try:
             self.running = False
-            self.trading_enabled = False
+            # НЕ отключаем торговлю автоматически - пользователь должен управлять этим сам
+            # self.trading_enabled = False  # УБРАНО: не отключаем торговлю при остановке потока
             self.logger.info("Остановка торгового потока запрошена")
+            
+            # Отправляем сигнал об остановке только если торговля была отключена
+            if not self.trading_enabled:
+                self.status_updated.emit("Отключено")
+            self.log_message.emit("Торговый поток остановлен пользователем")
             
             # Принудительно завершаем поток, если он не завершается сам
             self.terminate()
@@ -4595,9 +4585,16 @@ class TradingBotMainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Обработка закрытия приложения"""
+        # Проверяем статус торговли
+        trading_status = "включена" if (hasattr(self, 'trading_worker') and 
+                                       self.trading_worker is not None and 
+                                       self.trading_worker.trading_enabled) else "отключена"
+        
         reply = QMessageBox.question(
             self, "Выход",
-            "Вы уверены, что хотите закрыть торгового бота?",
+            "Вы уверены, что хотите закрыть торгового бота?\n\n"
+            "⚠️ ВНИМАНИЕ: Торговля сейчас {}.\n"
+            "Закрытие программы НЕ отключит торговлю автоматически.".format(trading_status),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )

@@ -29,7 +29,7 @@ try:
     from src.api.bybit_client import BybitClient
     from config import get_api_credentials, get_ml_config
 except ImportError as e:
-    print(f"Ошибка импорта модулей: {e}")
+    print("Ошибка импорта модулей: {}".format(e))
     print("Убедитесь, что все необходимые модули доступны")
 
 

@@ -191,7 +191,7 @@ class AdaptiveMLStrategy:
         
         # Параметры стратегии
         self.feature_window = config.get('feature_window', 50)
-        self.confidence_threshold = config.get('confidence_threshold', 0.5)  # Временно снижен с 0.65 до 0.5 для тестирования
+        self.confidence_threshold = config.get('confidence_threshold', 0.3)  # Снижен с 0.5 до 0.3 для более частых сигналов
         self.use_technical_indicators = config.get('use_technical_indicators', True)
         self.use_market_regime = config.get('use_market_regime', True)
         
@@ -564,17 +564,35 @@ class AdaptiveMLStrategy:
             signal = None
             confidence = 0.0
             
-            # Простые правила
-            if price_change_1h > 0.02 and price_change_24h > 0.05 and rsi < 70:
-                signal = 'BUY'
-                confidence = min(0.7, (price_change_1h + price_change_24h) * 5)
-            elif price_change_1h < -0.02 and price_change_24h < -0.05 and rsi > 30:
-                signal = 'SELL'
-                confidence = min(0.7, abs(price_change_1h + price_change_24h) * 5)
+            # СМЯГЧЕННЫЕ правила для более частых сигналов
             
-            # Корректировка на волатильность
+            # BUY условия (снижены пороги)
+            if ((price_change_1h > 0.005 and price_change_24h > 0.01) or  # 0.5% за час И 1% за день
+                (price_change_1h > 0.01) or  # ИЛИ 1% за час
+                (rsi < 30)):  # ИЛИ RSI перепродан
+                signal = 'BUY'
+                confidence = min(0.8, abs(price_change_1h) * 10 + abs(price_change_24h) * 5 + (50 - rsi) / 100)
+                confidence = max(0.3, confidence)  # Минимальная уверенность 0.3
+            
+            # SELL условия (снижены пороги)
+            elif ((price_change_1h < -0.005 and price_change_24h < -0.01) or  # -0.5% за час И -1% за день
+                  (price_change_1h < -0.01) or  # ИЛИ -1% за час
+                  (rsi > 70)):  # ИЛИ RSI перекуплен
+                signal = 'SELL'
+                confidence = min(0.8, abs(price_change_1h) * 10 + abs(price_change_24h) * 5 + (rsi - 50) / 100)
+                confidence = max(0.3, confidence)  # Минимальная уверенность 0.3
+            
+            # Дополнительные сигналы на основе комбинаций
+            elif price_change_1h > 0.003 and rsi < 50:  # Небольшой рост + RSI ниже среднего
+                signal = 'BUY'
+                confidence = 0.4
+            elif price_change_1h < -0.003 and rsi > 50:  # Небольшое падение + RSI выше среднего
+                signal = 'SELL'
+                confidence = 0.4
+            
+            # Корректировка на волатильность (менее агрессивная)
             if regime_info.get('regime') == 'high_volatility':
-                confidence *= 0.7  # Снижаем уверенность в волатильном рынке
+                confidence *= 0.9  # Снижаем уверенность только на 10%
             
             return {
                 'signal': signal,
@@ -584,7 +602,7 @@ class AdaptiveMLStrategy:
             }
             
         except Exception as e:
-            self.logger.error(f"Ошибка простой логики: {e}")
+            self.logger.error("Ошибка простой логики: {}".format(e))
             return {'signal': None, 'confidence': 0.0, 'model_used': False}
     
     def adjust_for_regime(self, signal: str, confidence: float, regime_info: Dict) -> Dict[str, Any]:

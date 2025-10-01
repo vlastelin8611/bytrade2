@@ -151,31 +151,47 @@ class BybitClient:
         }
         
         try:
-            if method.upper() == 'GET':
-                response = self.session.get(url, params=params, headers=headers, timeout=10)
-            elif method.upper() == 'POST':
-                request_body = body if body is not None else params
-                response = self.session.post(url, data=body_str if body_str else None, json=request_body if not body_str else None, headers=headers, timeout=10)
-            else:
-                raise ValueError(f"Неподдерживаемый HTTP метод: {method}")
+            # Увеличиваем timeout и добавляем retry логику
+            max_retries = 3
+            retry_delay = 2
             
-            response.raise_for_status()
-            data = response.json()
-            
-            # Проверка ответа API
-            if data.get('retCode') != 0:
-                error_msg = data.get('retMsg', 'Неизвестная ошибка API')
-                self.logger.error(f"API ошибка: {error_msg}")
-                raise Exception(f"API ошибка: {error_msg}")
-            
-            return data.get('result', {})
-            
+            for attempt in range(max_retries):
+                try:
+                    if method.upper() == 'GET':
+                        response = self.session.get(url, params=params, headers=headers, timeout=30)
+                    elif method.upper() == 'POST':
+                        request_body = body if body is not None else params
+                        response = self.session.post(url, data=body_str if body_str else None, json=request_body if not body_str else None, headers=headers, timeout=30)
+                    else:
+                        raise ValueError("Неподдерживаемый HTTP метод: {}".format(method))
+                    
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    # Проверка ответа API
+                    if data.get('retCode') != 0:
+                        error_msg = data.get('retMsg', 'Неизвестная ошибка API')
+                        self.logger.error("API ошибка: {}".format(error_msg))
+                        raise Exception("API ошибка: {}".format(error_msg))
+                    
+                    return data.get('result', {})
+                    
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                    if attempt < max_retries - 1:
+                        self.logger.warning("Попытка {} не удалась: {}. Повторяем через {} секунд...".format(attempt + 1, e, retry_delay))
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Экспоненциальная задержка
+                        continue
+                    else:
+                        self.logger.error("Все {} попыток не удались. Последняя ошибка: {}".format(max_retries, e))
+                        raise Exception("Ошибка соединения с API после {} попыток: {}".format(max_retries, e))
+                        
         except requests.exceptions.RequestException as e:
-            self.logger.error(f"Ошибка HTTP запроса: {e}")
-            raise Exception(f"Ошибка соединения с API: {e}")
+            self.logger.error("Ошибка HTTP запроса: {}".format(e))
+            raise Exception("Ошибка соединения с API: {}".format(e))
         except json.JSONDecodeError as e:
-            self.logger.error(f"Ошибка парсинга JSON: {e}")
-            raise Exception(f"Некорректный ответ API: {e}")
+            self.logger.error("Ошибка парсинга JSON: {}".format(e))
+            raise Exception("Некорректный ответ API: {}".format(e))
     
     def _get_cached_data(self, cache_key: str) -> Optional[Dict]:
         """Получение данных из кэша"""
