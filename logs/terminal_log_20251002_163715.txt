@@ -1,0 +1,10 @@
+=== Начало записи логов 20251002_163715 ===
+Traceback (most recent call last):
+  File "C:\Users\vlastelin8\Desktop\trade\crypto\trading_bot_main.py", line 4508, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\vlastelin8\Desktop\trade\crypto\trading_bot_main.py", line 4487, in main
+    app = QApplication(sys.argv)
+RuntimeError: Please destroy the QApplication singleton before creating a new QApplication instance.
+
+=== Конец записи логов 20251002_163715 ===

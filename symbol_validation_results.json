@@ -1,0 +1,126 @@
+{
+  "timestamp": 1758702372.568866,
+  "total_symbols": 682,
+  "usdt_symbols": 513,
+  "supported_symbols": {
+    "INITUSDT": [
+      "linear"
+    ],
+    "LINEAUSDT": [
+      "linear"
+    ],
+    "HOLOUSDT": [
+      "linear"
+    ],
+    "MIXUSDT": [
+      "spot"
+    ],
+    "CYBERUSDT": [
+      "spot"
+    ],
+    "DOODUSDT": [
+      "linear"
+    ],
+    "BERAUSDT": [
+      "linear"
+    ],
+    "MASAUSDT": [
+      "linear"
+    ],
+    "COMPUSDT": [
+      "spot",
+      "linear"
+    ],
+    "MAGICUSDT": [
+      "linear"
+    ],
+    "TWTUSDT": [
+      "spot"
+    ],
+    "BANUSDT": [
+      "linear"
+    ],
+    "OMUSDT": [
+      "linear"
+    ],
+    "MBOXUSDT": [
+      "linear"
+    ],
+    "PEOPLEUSDT": [
+      "linear"
+    ],
+    "NEARUSDT": [
+      "spot",
+      "linear"
+    ],
+    "ATOMUSDT": [
+      "spot"
+    ],
+    "ROAMUSDT": [
+      "linear"
+    ],
+    "BOBAUSDT": [
+      "linear"
+    ],
+    "BARDUSDT": [
+      "linear"
+    ],
+    "FLOWUSDT": [
+      "linear"
+    ],
+    "ETHUSDT": [
+      "spot",
+      "linear"
+    ],
+    "DEEPUSDT": [
+      "linear"
+    ],
+    "MOCAUSDT": [
+      "linear"
+    ],
+    "GPSUSDT": [
+      "linear"
+    ],
+    "RPLUSDT": [
+      "spot",
+      "linear"
+    ],
+    "MANTAUSDT": [
+      "linear"
+    ],
+    "1INCHUSDT": [
+      "spot",
+      "linear"
+    ],
+    "EPTUSDT": [
+      "linear"
+    ]
+  },
+  "invalid_symbols": [
+    "CFGUSDT",
+    "VELARUSDT",
+    "XAUTUSDT",
+    "ARTUSDT",
+    "FOXYUSDT",
+    "ZIGUSDT",
+    "KILOUSDT",
+    "ULTIUSDT",
+    "PBUXUSDT",
+    "NYMUSDT",
+    "SCUSDT",
+    "LMWRUSDT",
+    "ZEROUSDT",
+    "GSWIFTUSDT",
+    "SWELLUSDT",
+    "XOUSDT",
+    "TAUSDT",
+    "FLIPUSDT",
+    "STREAMUSDT",
+    "CMETHUSDT",
+    "VTHOUSDT"
+  ],
+  "categories_info": {
+    "spot": 188,
+    "linear": 433
+  }
+}

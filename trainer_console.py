@@ -130,8 +130,7 @@ class ConsoleTrainer:
                             symbol = instrument.get('symbol', '')
                             status = instrument.get('status', '')
                             
-                            # Более мягкие критерии валидации - принимаем больше символов
-                            if symbol.endswith('USDT') and status in ['Trading', 'PreLaunch']:
+                            if symbol.endswith('USDT') and status == 'Trading':
                                 active_usdt_count += 1
                                 if symbol not in all_valid_symbols:
                                     all_valid_symbols[symbol] = []
@@ -142,16 +141,11 @@ class ConsoleTrainer:
                 except Exception as e:
                     print(f"⚠️ Ошибка получения инструментов для категории {category}: {e}")
             
-            # Валидируем переданные символы с более мягкими критериями
+            # Валидируем переданные символы
             for symbol in symbols:
                 if symbol in all_valid_symbols:
                     validated_symbols.append(symbol)
                     symbol_categories[symbol] = all_valid_symbols[symbol]
-                else:
-                    # Если символ не найден в API, но есть в тикерах - добавляем его тоже
-                    if symbol.endswith('USDT'):
-                        validated_symbols.append(symbol)
-                        symbol_categories[symbol] = ['spot']  # По умолчанию считаем спотовым
             
             self.symbol_categories = symbol_categories
             print(f"✅ Валидировано {len(validated_symbols)} из {len(symbols)} символов")
@@ -160,10 +154,7 @@ class ConsoleTrainer:
             
         except Exception as e:
             print(f"❌ Ошибка валидации символов: {e}")
-            # В случае ошибки возвращаем все USDT символы
-            usdt_symbols = [s for s in symbols if s.endswith('USDT')]
-            self.symbol_categories = {symbol: ['spot'] for symbol in usdt_symbols}
-            return usdt_symbols
+            return []
     
     def load_symbols(self):
         """Загрузка списка символов"""

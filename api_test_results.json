@@ -1,0 +1,20 @@
+{
+  "BTCUSDT_basic": 200,
+  "ETHUSDT_basic": 200,
+  "ADAUSDT_basic": 200,
+  "SOLUSDT_basic": 200,
+  "DOTUSDT_basic": -1,
+  "BTCUSDT_interval_1": -1,
+  "BTCUSDT_interval_5": -1,
+  "BTCUSDT_interval_15": -1,
+  "BTCUSDT_interval_60": -1,
+  "BTCUSDT_interval_240": 200,
+  "BTCUSDT_interval_D": 200,
+  "BTCUSDT_limit_10": 10,
+  "BTCUSDT_limit_50": 50,
+  "BTCUSDT_limit_100": 100,
+  "BTCUSDT_limit_200": 200,
+  "BTCUSDT_limit_500": 500,
+  "BTCUSDT_limit_1000": 1000,
+  "BTCUSDT_with_time": 25
+}

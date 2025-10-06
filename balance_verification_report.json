@@ -1,0 +1,47 @@
+{
+  "timestamp": "2025-09-03 17:21:25",
+  "summary": {
+    "total_tests": 5,
+    "successful_tests": 5,
+    "success_rate": 100.0
+  },
+  "test_results": [
+    {
+      "test": "raw_api_call",
+      "status": "success",
+      "execution_time_ms": 925.7321357727051,
+      "response_type": "<class 'dict'>",
+      "has_required_fields": false
+    },
+    {
+      "test": "balance_parsing",
+      "status": "success",
+      "total_balance": 0.0,
+      "available_balance": 0.0,
+      "unrealized_pnl": 0.0,
+      "checks_passed": 3
+    },
+    {
+      "test": "consistency_check",
+      "status": "success",
+      "calls_made": 5,
+      "total_variance": 0.0,
+      "available_variance": 0.0,
+      "is_consistent": true,
+      "avg_execution_time_ms": 0.0
+    },
+    {
+      "test": "cache_behavior",
+      "status": "success",
+      "first_call_time_ms": 0.0,
+      "second_call_time_ms": 0.0,
+      "cache_likely_used": false,
+      "responses_identical": true
+    },
+    {
+      "test": "error_handling",
+      "status": "success",
+      "error_properly_handled": true
+    }
+  ]
+}

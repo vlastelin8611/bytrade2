@@ -29,7 +29,7 @@ try:
     from src.api.bybit_client import BybitClient
     from config import get_api_credentials, get_ml_config
 except ImportError as e:
-    print("Ошибка импорта модулей: {}".format(e))
+    print(f"Ошибка импорта модулей: {e}")
     print("Убедитесь, что все необходимые модули доступны")
 
 
@@ -607,7 +607,8 @@ class TrainingMonitor(QMainWindow):
                                     symbol_categories[symbol] = []
                                 symbol_categories[symbol].append(category)
 
-                        supported_symbols[category] = category_symbols
+                        if category not in supported_symbols:
+                            supported_symbols[category] = set()
                         self.log(f"✅ Категория '{category}': {len(supported_symbols[category])} активных USDT инструментов")
                     else:
                         supported_symbols[category] = set()

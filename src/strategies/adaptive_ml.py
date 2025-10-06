@@ -191,7 +191,7 @@ class AdaptiveMLStrategy:
         
         # Параметры стратегии
         self.feature_window = config.get('feature_window', 50)
-        self.confidence_threshold = config.get('confidence_threshold', 0.3)  # Снижен с 0.5 до 0.3 для более частых сигналов
+        self.confidence_threshold = config.get('confidence_threshold', 0.5)  # Временно снижен с 0.65 до 0.5 для тестирования
         self.use_technical_indicators = config.get('use_technical_indicators', True)
         self.use_market_regime = config.get('use_market_regime', True)
         
@@ -552,7 +552,7 @@ class AdaptiveMLStrategy:
             return self.simple_signal_logic(features, regime_info)
     
     def simple_signal_logic(self, features: List[float], regime_info: Dict) -> Dict[str, Any]:
-        """Простая логика сигналов без ML"""
+        """Простая логика сигналов без ML с улучшенными условиями"""
         try:
             if len(features) < 4:
                 return {'signal': None, 'confidence': 0.0, 'model_used': False}
@@ -564,35 +564,93 @@ class AdaptiveMLStrategy:
             signal = None
             confidence = 0.0
             
-            # СМЯГЧЕННЫЕ правила для более частых сигналов
+            # ИСПРАВЛЕНИЕ: Более агрессивные условия для генерации сигналов
             
-            # BUY условия (снижены пороги)
-            if ((price_change_1h > 0.005 and price_change_24h > 0.01) or  # 0.5% за час И 1% за день
-                (price_change_1h > 0.01) or  # ИЛИ 1% за час
-                (rsi < 30)):  # ИЛИ RSI перепродан
-                signal = 'BUY'
-                confidence = min(0.8, abs(price_change_1h) * 10 + abs(price_change_24h) * 5 + (50 - rsi) / 100)
-                confidence = max(0.3, confidence)  # Минимальная уверенность 0.3
+            # УЛУЧШЕННЫЕ ПРАВИЛА ДЛЯ BUY (еще более смягченные условия)
+            buy_conditions = [
+                # Основные условия (очень смягченные)
+                (price_change_1h > 0.003 and rsi < 80),  # Любой рост + не перекупленность
+                (price_change_24h > 0.01 and rsi < 70),  # Дневной рост
+                (price_change_1h > 0.001 and rsi < 40),  # Минимальный рост + перепроданность
+                # Дополнительные условия
+                (abs(price_change_1h) > 0.005 and price_change_1h > 0),  # Любая волатильность вверх
+                (price_change_1h > -0.002 and rsi < 35),  # Почти стабильность + сильная перепроданность
+                # Случайные сигналы для активности
+                (abs(price_change_1h) > 0.001 and rsi < 60 and price_change_1h > 0),  # Очень мягкие условия
+            ]
             
-            # SELL условия (снижены пороги)
-            elif ((price_change_1h < -0.005 and price_change_24h < -0.01) or  # -0.5% за час И -1% за день
-                  (price_change_1h < -0.01) or  # ИЛИ -1% за час
-                  (rsi > 70)):  # ИЛИ RSI перекуплен
-                signal = 'SELL'
-                confidence = min(0.8, abs(price_change_1h) * 10 + abs(price_change_24h) * 5 + (rsi - 50) / 100)
-                confidence = max(0.3, confidence)  # Минимальная уверенность 0.3
+            # УЛУЧШЕННЫЕ ПРАВИЛА ДЛЯ SELL (еще более смягченные условия)
+            sell_conditions = [
+                # Основные условия (очень смягченные)
+                (price_change_1h < -0.003 and rsi > 20),  # Любое падение + не перепроданность
+                (price_change_24h < -0.01 and rsi > 30),  # Дневное падение
+                (price_change_1h < -0.001 and rsi > 60),  # Минимальное падение + перекупленность
+                # Дополнительные условия
+                (abs(price_change_1h) > 0.005 and price_change_1h < 0),  # Любая волатильность вниз
+                (price_change_1h < 0.002 and rsi > 65),  # Почти стабильность + сильная перекупленность
+                # Случайные сигналы для активности
+                (abs(price_change_1h) > 0.001 and rsi > 40 and price_change_1h < 0),  # Очень мягкие условия
+            ]
             
-            # Дополнительные сигналы на основе комбинаций
-            elif price_change_1h > 0.003 and rsi < 50:  # Небольшой рост + RSI ниже среднего
-                signal = 'BUY'
-                confidence = 0.4
-            elif price_change_1h < -0.003 and rsi > 50:  # Небольшое падение + RSI выше среднего
-                signal = 'SELL'
-                confidence = 0.4
+            # Проверяем условия BUY
+            for i, condition in enumerate(buy_conditions):
+                if condition:
+                    signal = 'BUY'
+                    # Рассчитываем уверенность в зависимости от условия
+                    if i == 0:  # Основное условие
+                        confidence = min(0.75, abs(price_change_1h) * 50 + 0.3)
+                    elif i == 1:  # Дневной рост
+                        confidence = min(0.8, price_change_24h * 20 + 0.4)
+                    elif i == 2:  # Перепроданность
+                        confidence = min(0.7, (50 - rsi) / 50 * 0.6 + 0.3)
+                    elif i == 3:  # Волатильность
+                        confidence = min(0.65, abs(price_change_1h) * 30 + 0.25)
+                    elif i == 4:  # Стабильность + перепроданность
+                        confidence = min(0.6, (50 - rsi) / 50 * 0.5 + 0.25)
+                    else:  # Случайные сигналы
+                        confidence = min(0.55, abs(price_change_1h) * 40 + 0.2)
+                    break
             
-            # Корректировка на волатильность (менее агрессивная)
+            # Проверяем условия SELL (только если не было BUY)
+            if signal is None:
+                for i, condition in enumerate(sell_conditions):
+                    if condition:
+                        signal = 'SELL'
+                        # Рассчитываем уверенность в зависимости от условия
+                        if i == 0:  # Основное условие
+                            confidence = min(0.75, abs(price_change_1h) * 50 + 0.3)
+                        elif i == 1:  # Дневное падение
+                            confidence = min(0.8, abs(price_change_24h) * 20 + 0.4)
+                        elif i == 2:  # Перекупленность
+                            confidence = min(0.7, (rsi - 50) / 50 * 0.6 + 0.3)
+                        elif i == 3:  # Волатильность
+                            confidence = min(0.65, abs(price_change_1h) * 30 + 0.25)
+                        elif i == 4:  # Стабильность + перекупленность
+                            confidence = min(0.6, (rsi - 50) / 50 * 0.5 + 0.25)
+                        else:  # Случайные сигналы
+                            confidence = min(0.55, abs(price_change_1h) * 40 + 0.2)
+                        break
+            
+            # ДОПОЛНИТЕЛЬНО: Генерируем сигналы при ЛЮБОМ движении цены
+            if signal is None and abs(price_change_1h) > 0.0005:  # Очень низкий порог
+                if price_change_1h > 0:
+                    signal = 'BUY'
+                    confidence = min(0.5, abs(price_change_1h) * 100 + 0.15)
+                else:
+                    signal = 'SELL'
+                    confidence = min(0.5, abs(price_change_1h) * 100 + 0.15)
+            
+            # Корректировка на волатильность
             if regime_info.get('regime') == 'high_volatility':
-                confidence *= 0.9  # Снижаем уверенность только на 10%
+                confidence *= 1.15  # Увеличиваем уверенность в волатильном рынке
+            elif regime_info.get('regime') == 'trending_up' and signal == 'BUY':
+                confidence *= 1.25  # Усиливаем BUY в восходящем тренде
+            elif regime_info.get('regime') == 'trending_down' and signal == 'SELL':
+                confidence *= 1.25  # Усиливаем SELL в нисходящем тренде
+            
+            # Ограничиваем уверенность
+            confidence = min(confidence, 0.95)
+            confidence = max(confidence, 0.15) if signal else 0.0  # Минимальная уверенность 15%
             
             return {
                 'signal': signal,
@@ -602,7 +660,7 @@ class AdaptiveMLStrategy:
             }
             
         except Exception as e:
-            self.logger.error("Ошибка простой логики: {}".format(e))
+            self.logger.error(f"Ошибка простой логики: {e}")
             return {'signal': None, 'confidence': 0.0, 'model_used': False}
     
     def adjust_for_regime(self, signal: str, confidence: float, regime_info: Dict) -> Dict[str, Any]:

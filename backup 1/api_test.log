@@ -1,0 +1,202 @@
+2025-09-03 17:13:33,667 - __main__ - INFO - ============================================================
+2025-09-03 17:13:33,667 - __main__ - INFO - 🚀 ЗАПУСК ТЕСТИРОВАНИЯ API ПОДКЛЮЧЕНИЯ
+2025-09-03 17:13:33,667 - __main__ - INFO - ============================================================
+2025-09-03 17:13:33,671 - __main__ - INFO - 📋 Загрузка конфигурации...
+2025-09-03 17:13:33,671 - __main__ - INFO - 🔑 API Key: 9HlqDp2h1H...
+2025-09-03 17:13:33,673 - __main__ - INFO - 🔐 API Secret: ************************************
+2025-09-03 17:13:33,673 - __main__ - INFO - 🌐 Testnet: True
+2025-09-03 17:13:33,673 - __main__ - INFO - 📡 Инициализация Bybit клиента...
+2025-09-03 17:13:33,901 - __main__ - INFO - ✅ Клиент успешно создан
+2025-09-03 17:13:33,901 - __main__ - INFO - 🔗 Тестирование подключения...
+2025-09-03 17:13:33,901 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): api-testnet.bybit.com:443
+2025-09-03 17:13:34,541 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-03 17:13:34,542 - __main__ - INFO - 📊 Результат теста подключения: True
+2025-09-03 17:13:34,542 - __main__ - INFO - ⏰ Получение времени сервера...
+2025-09-03 17:13:34,810 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-03 17:13:34,810 - __main__ - INFO - 🕐 Время сервера: 1756890813
+2025-09-03 17:13:34,810 - __main__ - INFO - 💰 Получение баланса кошелька...
+2025-09-03 17:13:35,089 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/account/wallet-balance?accountType=UNIFIED HTTP/1.1" 200 230
+2025-09-03 17:13:35,090 - api.bybit_client - ERROR - API ошибка: invalid request, please check your server timestamp or recv_window param. req_timestamp[1756890814810],server_timestamp[1756890813738],recv_window[5000]
+2025-09-03 17:13:35,090 - __main__ - ERROR - ❌ Неожиданная ошибка: API ошибка: invalid request, please check your server timestamp or recv_window param. req_timestamp[1756890814810],server_timestamp[1756890813738],recv_window[5000]
+2025-09-03 17:13:35,090 - __main__ - ERROR - 📋 Тип ошибки: Exception
+2025-09-03 17:13:35,091 - __main__ - ERROR - 📄 Трассировка:
+Traceback (most recent call last):
+  File "C:\Users\vlastelin8\Desktop\trade\crypto\test_api_connection.py", line 74, in test_api_connection
+    balance_info = client.get_wallet_balance(account_type="UNIFIED")
+  File "C:\Users\vlastelin8\Desktop\trade\crypto\src\api\bybit_client.py", line 163, in get_wallet_balance
+    result = self._make_request('GET', '/v5/account/wallet-balance', params)
+  File "C:\Users\vlastelin8\Desktop\trade\crypto\src\api\bybit_client.py", line 130, in _make_request
+    raise Exception(f"API ошибка: {error_msg}")
+Exception: API ошибка: invalid request, please check your server timestamp or recv_window param. req_timestamp[1756890814810],server_timestamp[1756890813738],recv_window[5000]
+
+2025-09-03 17:14:17,576 - __main__ - INFO - ============================================================
+2025-09-03 17:14:17,577 - __main__ - INFO - 🚀 ЗАПУСК ТЕСТИРОВАНИЯ API ПОДКЛЮЧЕНИЯ
+2025-09-03 17:14:17,577 - __main__ - INFO - ============================================================
+2025-09-03 17:14:17,577 - __main__ - INFO - 📋 Загрузка конфигурации...
+2025-09-03 17:14:17,578 - __main__ - INFO - 🔑 API Key: 9HlqDp2h1H...
+2025-09-03 17:14:17,578 - __main__ - INFO - 🔐 API Secret: ************************************
+2025-09-03 17:14:17,578 - __main__ - INFO - 🌐 Testnet: True
+2025-09-03 17:14:17,578 - __main__ - INFO - 📡 Инициализация Bybit клиента...
+2025-09-03 17:14:17,826 - __main__ - INFO - ✅ Клиент успешно создан
+2025-09-03 17:14:17,826 - __main__ - INFO - 🔗 Тестирование подключения...
+2025-09-03 17:14:17,830 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): api-testnet.bybit.com:443
+2025-09-03 17:14:18,326 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-03 17:14:18,974 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-03 17:14:18,975 - __main__ - INFO - 📊 Результат теста подключения: True
+2025-09-03 17:14:18,975 - __main__ - INFO - ⏰ Получение времени сервера...
+2025-09-03 17:14:19,244 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-03 17:14:19,512 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-03 17:14:19,513 - __main__ - INFO - 🕐 Время сервера: 1756890858
+2025-09-03 17:14:19,513 - __main__ - INFO - 💰 Получение баланса кошелька...
+2025-09-03 17:14:19,780 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-03 17:14:20,403 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/account/wallet-balance?accountType=UNIFIED HTTP/1.1" 200 456
+2025-09-03 17:14:20,404 - __main__ - INFO - 📈 РЕЗУЛЬТАТ ЗАПРОСА БАЛАНСА:
+2025-09-03 17:14:20,404 - __main__ - INFO - Raw response: {
+  "list": [
+    {
+      "accountIMRate": "0",
+      "totalMaintenanceMarginByMp": "0",
+      "totalInitialMargin": "0",
+      "accountType": "UNIFIED",
+      "accountMMRate": "0",
+      "accountMMRateByMp": "0",
+      "accountIMRateByMp": "0",
+      "totalInitialMarginByMp": "0",
+      "totalMaintenanceMargin": "0",
+      "totalEquity": "0",
+      "totalMarginBalance": "0",
+      "totalAvailableBalance": "0",
+      "totalPerpUPL": "0",
+      "totalWalletBalance": "0",
+      "accountLTV": "0",
+      "coin": []
+    }
+  ]
+}
+2025-09-03 17:14:20,404 - __main__ - INFO - 💵 ДЕТАЛИ БАЛАНСА:
+2025-09-03 17:14:20,405 - __main__ - INFO -    💰 Общий баланс: $0.000000
+2025-09-03 17:14:20,405 - __main__ - INFO -    💳 Доступный баланс: $0.000000
+2025-09-03 17:14:20,405 - __main__ - INFO -    📊 Нереализованный P&L: $0.000000
+2025-09-03 17:14:20,405 - __main__ - WARNING - ⚠️ Список активов пуст или не найден
+2025-09-03 17:14:20,405 - __main__ - INFO - 📍 Получение позиций...
+2025-09-03 17:14:21,065 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-03 17:14:21,344 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/position/list?category=linear&settleCoin=USDT HTTP/1.1" 200 125
+2025-09-03 17:14:21,344 - __main__ - INFO - 📋 ПОЗИЦИИ: найдено 0 позиций
+2025-09-03 17:14:21,344 - __main__ - INFO - 🔧 Получение информации об инструментах...
+2025-09-03 17:14:21,613 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-03 17:14:22,256 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/instruments-info?category=linear HTTP/1.1" 200 None
+2025-09-03 17:14:23,046 - __main__ - INFO - 🛠️ Доступно инструментов: 500
+2025-09-03 17:14:23,046 - __main__ - INFO -    🔹 1000000BABYDOGEUSDT: Trading
+2025-09-03 17:14:23,046 - __main__ - INFO -    🔹 1000000CHEEMSUSDT: Trading
+2025-09-03 17:14:23,046 - __main__ - INFO -    🔹 1000000MOGUSDT: Trading
+2025-09-03 17:14:23,047 - __main__ - INFO -    🔹 1000000PEIPEIUSDT: Trading
+2025-09-03 17:14:23,047 - __main__ - INFO -    🔹 10000COQUSDT: Trading
+2025-09-03 17:14:23,047 - __main__ - INFO - ============================================================
+2025-09-03 17:14:23,047 - __main__ - INFO - ✅ ТЕСТИРОВАНИЕ ЗАВЕРШЕНО УСПЕШНО
+2025-09-03 17:14:23,047 - __main__ - INFO - ============================================================
+2025-09-06 16:44:28,133 - __main__ - INFO - ============================================================
+2025-09-06 16:44:28,133 - __main__ - INFO - 🚀 ЗАПУСК ТЕСТИРОВАНИЯ API ПОДКЛЮЧЕНИЯ
+2025-09-06 16:44:28,134 - __main__ - INFO - ============================================================
+2025-09-06 16:44:28,134 - __main__ - INFO - 📋 Загрузка конфигурации...
+2025-09-06 16:44:28,135 - __main__ - INFO - 🔑 API Key: 9HlqDp2h1H...
+2025-09-06 16:44:28,135 - __main__ - INFO - 🔐 API Secret: ************************************
+2025-09-06 16:44:28,135 - __main__ - INFO - 🌐 Testnet: True
+2025-09-06 16:44:28,135 - __main__ - INFO - 📡 Инициализация Bybit клиента...
+2025-09-06 16:44:28,402 - __main__ - INFO - ✅ Клиент успешно создан
+2025-09-06 16:44:28,402 - __main__ - INFO - 🔗 Тестирование подключения...
+2025-09-06 16:44:28,407 - urllib3.connectionpool - DEBUG - Starting new HTTPS connection (1): api-testnet.bybit.com:443
+2025-09-06 16:44:28,866 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-06 16:44:29,133 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-06 16:44:29,134 - __main__ - INFO - 📊 Результат теста подключения: True
+2025-09-06 16:44:29,134 - __main__ - INFO - ⏰ Получение времени сервера...
+2025-09-06 16:44:29,402 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-06 16:44:29,667 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-06 16:44:29,668 - __main__ - INFO - 🕐 Время сервера: 1757148269
+2025-09-06 16:44:29,668 - __main__ - INFO - 💰 Получение баланса кошелька...
+2025-09-06 16:44:30,282 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-06 16:44:30,552 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/account/wallet-balance?accountType=UNIFIED HTTP/1.1" 200 None
+2025-09-06 16:44:30,553 - __main__ - INFO - 📈 РЕЗУЛЬТАТ ЗАПРОСА БАЛАНСА:
+2025-09-06 16:44:30,553 - __main__ - INFO - Raw response: {
+  "list": [
+    {
+      "accountIMRate": "0",
+      "totalMaintenanceMarginByMp": "0",
+      "totalInitialMargin": "0",
+      "accountType": "UNIFIED",
+      "accountMMRate": "0",
+      "accountMMRateByMp": "0",
+      "accountIMRateByMp": "0",
+      "totalInitialMarginByMp": "0",
+      "totalMaintenanceMargin": "0",
+      "totalEquity": "121910.596317",
+      "totalMarginBalance": "11001.298",
+      "totalAvailableBalance": "11001.298",
+      "totalPerpUPL": "0",
+      "totalWalletBalance": "11001.298",
+      "accountLTV": "0",
+      "coin": [
+        {
+          "availableToBorrow": "",
+          "bonus": "0",
+          "accruedInterest": "0",
+          "availableToWithdraw": "",
+          "totalOrderIM": "0",
+          "equity": "1",
+          "totalPositionMM": "0",
+          "usdValue": "110909.298317",
+          "unrealisedPnl": "0",
+          "collateralSwitch": false,
+          "spotHedgingQty": "0",
+          "borrowAmount": "0.000000000000000000",
+          "totalPositionIM": "0",
+          "walletBalance": "1",
+          "cumRealisedPnl": "0",
+          "locked": "0",
+          "marginCollateral": true,
+          "coin": "BTC"
+        },
+        {
+          "availableToBorrow": "",
+          "bonus": "0",
+          "accruedInterest": "0",
+          "availableToWithdraw": "",
+          "totalOrderIM": "0",
+          "equity": "11000",
+          "totalPositionMM": "0",
+          "usdValue": "11001.298",
+          "unrealisedPnl": "0",
+          "collateralSwitch": true,
+          "spotHedgingQty": "0",
+          "borrowAmount": "0.000000000000000000",
+          "totalPositionIM": "0",
+          "walletBalance": "11000",
+          "cumRealisedPnl": "0",
+          "locked": "0",
+          "marginCollateral": true,
+          "coin": "USDT"
+        }
+      ]
+    }
+  ]
+}
+2025-09-06 16:44:30,554 - __main__ - INFO - 💵 ДЕТАЛИ БАЛАНСА:
+2025-09-06 16:44:30,554 - __main__ - INFO -    💰 Общий баланс: $0.000000
+2025-09-06 16:44:30,554 - __main__ - INFO -    💳 Доступный баланс: $0.000000
+2025-09-06 16:44:30,554 - __main__ - INFO -    📊 Нереализованный P&L: $0.000000
+2025-09-06 16:44:30,554 - __main__ - WARNING - ⚠️ Список активов пуст или не найден
+2025-09-06 16:44:30,554 - __main__ - INFO - 📍 Получение позиций...
+2025-09-06 16:44:30,822 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-06 16:44:31,094 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/position/list?category=linear&settleCoin=USDT HTTP/1.1" 200 125
+2025-09-06 16:44:31,095 - __main__ - INFO - 📋 ПОЗИЦИИ: найдено 0 позиций
+2025-09-06 16:44:31,095 - __main__ - INFO - 🔧 Получение информации об инструментах...
+2025-09-06 16:44:31,707 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/time HTTP/1.1" 200 134
+2025-09-06 16:44:32,526 - urllib3.connectionpool - DEBUG - https://api-testnet.bybit.com:443 "GET /v5/market/instruments-info?category=linear HTTP/1.1" 200 None
+2025-09-06 16:44:33,135 - __main__ - INFO - 🛠️ Доступно инструментов: 500
+2025-09-06 16:44:33,139 - __main__ - INFO -    🔹 1000000BABYDOGEUSDT: Trading
+2025-09-06 16:44:33,139 - __main__ - INFO -    🔹 1000000CHEEMSUSDT: Trading
+2025-09-06 16:44:33,139 - __main__ - INFO -    🔹 1000000MOGUSDT: Trading
+2025-09-06 16:44:33,140 - __main__ - INFO -    🔹 1000000PEIPEIUSDT: Trading
+2025-09-06 16:44:33,140 - __main__ - INFO -    🔹 10000COQUSDT: Trading
+2025-09-06 16:44:33,140 - __main__ - INFO - ============================================================
+2025-09-06 16:44:33,140 - __main__ - INFO - ✅ ТЕСТИРОВАНИЕ ЗАВЕРШЕНО УСПЕШНО
+2025-09-06 16:44:33,140 - __main__ - INFO - ============================================================

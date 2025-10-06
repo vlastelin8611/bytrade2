@@ -1,0 +1,87 @@
+=== Начало записи логов 20250922_150835 ===
+2025-09-22 15:08:35,470 - INFO - Запуск программы просмотра тикеров
+2025-09-22 15:08:36,319 - INFO - Загружены сохраненные данные тикеров. Последнее обновление: 2025-09-22 15:04:46.215775
+2025-09-22 15:08:37,377 - ERROR - Ошибка при обновлении тикеров: main thread is not in main loop
+2025-09-22 15:08:46,539 - ERROR - Ошибка при получении данных тикеров: HTTPSConnectionPool(host='api.bybit.com', port=443): Read timed out. (read timeout=10)
+2025-09-22 15:08:46,540 - INFO - Интерфейс программы просмотра тикеров инициализирован
+2025-09-22 15:09:08,096 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:09:31,251 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:09:31,296 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:09:46,186 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:09:46,226 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:10:17,022 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:11:17,123 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:11:17,170 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:11:48,312 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:12:36,110 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:12:36,149 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:13:06,930 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:13:50,780 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:13:50,815 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:14:21,600 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:15:04,809 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:15:04,842 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:15:35,682 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:16:13,416 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:16:13,453 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:16:53,660 - ERROR - Ошибка при получении данных тикеров: HTTPSConnectionPool(host='api.bybit.com', port=443): Read timed out. (read timeout=10)
+2025-09-22 15:16:53,701 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:17:24,402 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:18:02,616 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:18:02,645 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:18:33,656 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:19:12,241 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:19:12,276 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:19:43,170 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:20:24,911 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:20:24,950 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:20:55,780 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:21:38,736 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:21:38,773 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:22:09,930 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:22:48,757 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:22:48,799 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:23:40,051 - ERROR - Ошибка при получении данных тикеров: HTTPSConnectionPool(host='api.bybit.com', port=443): Read timed out. (read timeout=10)
+2025-09-22 15:23:40,097 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:24:11,305 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:24:58,572 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:24:58,618 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:25:29,469 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:26:16,265 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:26:16,310 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:26:47,057 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:27:32,608 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:27:32,643 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:28:03,416 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:28:52,564 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:28:52,598 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:29:23,582 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:30:08,846 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:30:08,889 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:30:39,728 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:31:24,837 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:31:24,872 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:31:55,721 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:32:35,874 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:32:35,913 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:33:06,768 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:33:50,134 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:33:50,173 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:34:21,009 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:35:00,784 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:35:00,829 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:35:31,616 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:36:15,309 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:36:15,352 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:36:46,611 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:37:33,213 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:37:33,250 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:38:13,440 - ERROR - Ошибка при получении данных тикеров: HTTPSConnectionPool(host='api.bybit.com', port=443): Read timed out. (read timeout=10)
+2025-09-22 15:38:13,477 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:38:44,386 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:39:23,353 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:39:23,387 - INFO - Данные тикеров сохранены в C:\Users\vlastelin8\AppData\Local\BybitTradingBot\data\tickers_data.json
+2025-09-22 15:39:54,169 - INFO - Получено 681 тикеров через API Bybit
+2025-09-22 15:39:55,260 - INFO - Завершение программы просмотра тикеров
+
+=== Конец записи логов 20250922_153955 ===

@@ -1,0 +1,92 @@
+[
+  {
+    "test_case": {
+      "symbol": "BTCUSDT",
+      "interval": "240",
+      "limit": 200,
+      "category": "spot"
+    },
+    "klines_count": 200,
+    "success": true
+  },
+  {
+    "test_case": {
+      "symbol": "BTCUSDT",
+      "interval": "240",
+      "limit": 1000,
+      "category": "spot"
+    },
+    "klines_count": 1000,
+    "success": true
+  },
+  {
+    "test_case": {
+      "symbol": "BTCUSDT",
+      "interval": "240",
+      "limit": 50,
+      "category": "spot"
+    },
+    "klines_count": 50,
+    "success": true
+  },
+  {
+    "test_case": {
+      "symbol": "BTCUSDT",
+      "interval": "60",
+      "limit": 200,
+      "category": "spot"
+    },
+    "klines_count": 200,
+    "success": true
+  },
+  {
+    "test_case": {
+      "symbol": "BTCUSDT",
+      "interval": "D",
+      "limit": 200,
+      "category": "spot"
+    },
+    "klines_count": 200,
+    "success": true
+  },
+  {
+    "test_case": {
+      "symbol": "BTCUSDT",
+      "interval": "15",
+      "limit": 200,
+      "category": "spot"
+    },
+    "klines_count": 200,
+    "success": true
+  },
+  {
+    "test_case": {
+      "symbol": "BTCUSDT",
+      "interval": "240",
+      "limit": 200,
+      "category": "linear"
+    },
+    "klines_count": 200,
+    "success": true
+  },
+  {
+    "test_case": {
+      "symbol": "ETHUSDT",
+      "interval": "240",
+      "limit": 200,
+      "category": "spot"
+    },
+    "klines_count": 200,
+    "success": true
+  },
+  {
+    "test_case": {
+      "symbol": "ADAUSDT",
+      "interval": "240",
+      "limit": 200,
+      "category": "spot"
+    },
+    "klines_count": 200,
+    "success": true
+  }
+]

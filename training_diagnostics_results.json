@@ -1,0 +1,170 @@
+{
+  "total_symbols_available": 188,
+  "analyzed_symbols": 8,
+  "authenticity_stats": {
+    "authentic": 0,
+    "suspicious": 8,
+    "invalid": 0
+  },
+  "detailed_results": [
+    {
+      "symbol": "BTCUSDT",
+      "records_count": 1000,
+      "authenticity": {
+        "status": "suspicious",
+        "issue": "too_high_volatility",
+        "max_change": 5.7552014694617455
+      },
+      "labels": {
+        "status": "success",
+        "total_labels": 979,
+        "unique_labels": 3,
+        "distribution": {
+          "1": 181,
+          "-1": 280,
+          "0": 518
+        },
+        "balance_ratio": 0.34942084942084944
+      }
+    },
+    {
+      "symbol": "ETHUSDT",
+      "records_count": 1000,
+      "authenticity": {
+        "status": "suspicious",
+        "issue": "too_high_volatility",
+        "max_change": 23.653442602840823
+      },
+      "labels": {
+        "status": "success",
+        "total_labels": 979,
+        "unique_labels": 3,
+        "distribution": {
+          "1": 196,
+          "-1": 298,
+          "0": 485
+        },
+        "balance_ratio": 0.4041237113402062
+      }
+    },
+    {
+      "symbol": "XRPUSDT",
+      "records_count": 1000,
+      "authenticity": {
+        "status": "suspicious",
+        "issue": "too_high_volatility",
+        "max_change": 3.9575866188769417
+      },
+      "labels": {
+        "status": "success",
+        "total_labels": 979,
+        "unique_labels": 3,
+        "distribution": {
+          "1": 192,
+          "0": 577,
+          "-1": 210
+        },
+        "balance_ratio": 0.3327556325823224
+      }
+    },
+    {
+      "symbol": "UNIUSDT",
+      "records_count": 1000,
+      "authenticity": {
+        "status": "suspicious",
+        "issue": "too_many_zero_volumes",
+        "zero_rate": 0.959
+      },
+      "labels": {
+        "status": "success",
+        "total_labels": 979,
+        "unique_labels": 3,
+        "distribution": {
+          "-1": 5,
+          "1": 9,
+          "0": 965
+        },
+        "balance_ratio": 0.0051813471502590676
+      }
+    },
+    {
+      "symbol": "SUSHIUSDT",
+      "records_count": 1000,
+      "authenticity": {
+        "status": "suspicious",
+        "issue": "too_low_volatility",
+        "avg_change": 8.024270529614642e-06
+      },
+      "labels": {
+        "status": "success",
+        "total_labels": 979,
+        "unique_labels": 2,
+        "distribution": {
+          "0": 978,
+          "-1": 1
+        },
+        "balance_ratio": 0.0010224948875255625
+      }
+    },
+    {
+      "symbol": "DOTUSDT",
+      "records_count": 1000,
+      "authenticity": {
+        "status": "suspicious",
+        "issue": "too_many_zero_volumes",
+        "zero_rate": 0.756
+      },
+      "labels": {
+        "status": "success",
+        "total_labels": 979,
+        "unique_labels": 3,
+        "distribution": {
+          "0": 903,
+          "-1": 43,
+          "1": 33
+        },
+        "balance_ratio": 0.036544850498338874
+      }
+    },
+    {
+      "symbol": "XLMUSDT",
+      "records_count": 1000,
+      "authenticity": {
+        "status": "suspicious",
+        "issue": "too_many_zero_volumes",
+        "zero_rate": 0.93
+      },
+      "labels": {
+        "status": "success",
+        "total_labels": 979,
+        "unique_labels": 3,
+        "distribution": {
+          "0": 947,
+          "-1": 16,
+          "1": 16
+        },
+        "balance_ratio": 0.01689545934530095
+      }
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "records_count": 1000,
+      "authenticity": {
+        "status": "suspicious",
+        "issue": "too_high_volatility",
+        "max_change": 1.7867647058823528
+      },
+      "labels": {
+        "status": "success",
+        "total_labels": 979,
+        "unique_labels": 3,
+        "distribution": {
+          "0": 772,
+          "1": 119,
+          "-1": 88
+        },
+        "balance_ratio": 0.11398963730569948
+      }
+    }
+  ]
+}

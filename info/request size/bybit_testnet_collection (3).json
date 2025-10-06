@@ -1,0 +1,44 @@
+{
+  "info": {
+    "_postman_id": "9d0bf33b-c3d5-4f5b-92ca-2cabdca0a111",
+    "name": "Bybit Testnet - Minimum Order Size",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Get Instrument Info (Spot)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "User-Agent",
+            "value": "PostmanRuntime/7.32.2",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/v5/market/instruments-info?category=spot&symbol={{symbol}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "v5",
+            "market",
+            "instruments-info"
+          ],
+          "query": [
+            {
+              "key": "category",
+              "value": "spot"
+            },
+            {
+              "key": "symbol",
+              "value": "{{symbol}}"
+            }
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}
