@@ -38,7 +38,7 @@ try:
         QTableWidgetItem, QHeaderView, QSpacerItem, QSizePolicy
     )
     from PySide6.QtCore import QTimer, QThread, Signal, Qt, QMutex
-    from PySide6.QtGui import QFont, QColor, QPalette
+    from PySide6.QtGui import QFont, QColor, QPalette, QTextCursor
     GUI_AVAILABLE = True
 except ImportError as e:
     print(f"❌ Ошибка импорта GUI: {e}")
@@ -63,6 +63,10 @@ class TradingSignal:
         self.price = price
         self.reason = reason
         self.timestamp = datetime.now()
+        self.execution_attempts = 0  # Счетчик попыток исполнения
+        self.max_attempts = 3  # Максимальное количество попыток
+        self.last_attempt_time = None  # Время последней попытки
+        self.status = "PENDING"  # PENDING, EXECUTING, EXECUTED, FAILED
 
 
 class DataCollector(QThread):
@@ -176,7 +180,7 @@ class SignalGenerator:
     
     def __init__(self, logger):
         self.logger = logger
-        self.min_confidence = 0.3  # Минимальная уверенность для сигнала (снижено для тестирования)
+        self.min_confidence = 0.1  # Минимальная уверенность для сигнала (снижено до 0.1 для максимальной активности)
         
     def generate_signals(self, data: Dict, portfolio: Dict) -> List[TradingSignal]:
         """Генерация торговых сигналов на основе данных"""
@@ -218,7 +222,7 @@ class SignalGenerator:
             # Сортируем сигналы по уверенности (наименее рискованные первыми)
             signals.sort(key=lambda x: x.confidence, reverse=True)
             
-            return signals[:30]  # Возвращаем топ-30 сигналов для полноценного использования нейросети
+            return signals[:50]  # Увеличиваем с 30 до 50 сигналов для более активной торговли
             
         except Exception as e:
             self.logger.error(f"Ошибка генерации сигналов: {e}")
@@ -227,6 +231,7 @@ class SignalGenerator:
     def get_usdt_pairs(self, ticker_data) -> List[str]:
         """Получение списка USDT торговых пар с активным движением цены"""
         pairs = []
+        active_pairs = []
         
         # Если ticker_data - это список словарей (как из TickerDataLoader)
         if isinstance(ticker_data, list):
@@ -235,29 +240,44 @@ class SignalGenerator:
                     symbol = ticker['symbol']
                     if symbol.endswith('USDT') and symbol != 'USDT':
                         pairs.append(symbol)
+                        # Проверяем активность символа (есть ли изменение цены)
+                        price_change = float(ticker.get('price24hPcnt', 0))
+                        volume = float(ticker.get('volume24h', 0))
+                        if abs(price_change) > 0.0001 or volume > 1000:  # Активные символы
+                            active_pairs.append(symbol)
         # Если ticker_data - это словарь
         elif isinstance(ticker_data, dict):
             # Получаем все USDT пары из тикеров
             tickers = ticker_data.get('tickers', ticker_data)
             for symbol, ticker_info in tickers.items():
                 if symbol.endswith('USDT') and symbol != 'USDT':
-                    # Добавляем все USDT символы для полноценного анализа нейросети
                     pairs.append(symbol)
+                    # Проверяем активность символа
+                    price_change = float(ticker_info.get('price24hPcnt', 0))
+                    volume = float(ticker_info.get('volume24h', 0))
+                    if abs(price_change) > 0.0001 or volume > 1000:  # Активные символы
+                        active_pairs.append(symbol)
         
-        # Если нет данных тикеров, используем стандартный список (только проверенные символы)
-        if not pairs:
-            pairs = [
-                'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT',
-                'XRPUSDT', 'DOTUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT',
-                'MATICUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'FILUSDT'
-            ]
+        # Приоритет активным символам, но добавляем популярные как резерв
+        popular_pairs = [
+            'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT',
+            'XRPUSDT', 'DOTUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT',
+            'MATICUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'FILUSDT'
+        ]
+        
+        # Используем активные символы, если есть, иначе популярные
+        if active_pairs:
+            # Добавляем популярные символы к активным для полноты анализа
+            final_pairs = list(set(active_pairs + popular_pairs))
+        else:
+            final_pairs = popular_pairs
         
         # Фильтруем недоступные символы для testnet
         invalid_symbols = {'SHIB1000USDT', 'BANDUSDT', 'WIFUSDT', 'HBARUSDT'}
-        pairs = [pair for pair in pairs if pair not in invalid_symbols]
+        final_pairs = [pair for pair in final_pairs if pair not in invalid_symbols]
         
-        self.logger.info(f"🎯 Найдено {len(pairs)} активных USDT пар для анализа")
-        return pairs
+        self.logger.info(f"🎯 Найдено {len(active_pairs)} активных и {len(final_pairs)} общих USDT пар для анализа")
+        return final_pairs
     
     def analyze_symbol(self, symbol: str, ticker_data, ml_data: Dict, portfolio: Dict) -> Optional[TradingSignal]:
         """Анализ конкретного символа для генерации сигнала"""
@@ -299,45 +319,45 @@ class SignalGenerator:
             self.logger.debug(f"🔍 Анализ {symbol}: цена=${current_price:.6f}, изменение 24ч={price_change_24h:.2%}, ML точность={ml_accuracy:.2f}")
             
             # Проверяем ML данные
-            if ml_accuracy > 0.5:  # Снижаем порог с 0.7 до 0.5
+            if ml_accuracy > 0.1:  # Снижаем порог с 0.3 до 0.1 для еще большего количества сигналов
                 self.logger.debug(f"🤖 ML модель активна для {symbol}, точность: {ml_accuracy:.2f}")
                 # Используем ML логику с более мягкими условиями
-                if price_change_24h > 0.002:  # Рост более 0.2% (было 0.5%)
+                if price_change_24h > 0.0001:  # Рост более 0.01% (было 0.05%)
                     signal_type = 'BUY'
                     confidence = min(0.8, ml_accuracy * 0.9)
                     reason = f"ML модель (точность: {ml_accuracy:.2f}), рост 24ч: {price_change_24h:.2%}"
-                    self.logger.debug(f"🟢 ML BUY сигнал для {symbol}: изменение {price_change_24h:.4f} > 0.002")
-                elif price_change_24h < -0.002:  # Падение более 0.2% (было 0.5%)
+                    self.logger.debug(f"🟢 ML BUY сигнал для {symbol}: изменение {price_change_24h:.4f} > 0.0001")
+                elif price_change_24h < -0.0001:  # Падение более 0.01% (было 0.05%)
                     # Проверяем, есть ли актив в портфолио для продажи
                     base_asset = symbol.replace('USDT', '')
                     if base_asset in portfolio and float(portfolio[base_asset]) > 0:
                         signal_type = 'SELL'
                         confidence = min(0.8, ml_accuracy * 0.9)
                         reason = f"ML модель (точность: {ml_accuracy:.2f}), падение 24ч: {price_change_24h:.2%}"
-                        self.logger.debug(f"🔴 ML SELL сигнал для {symbol}: изменение {price_change_24h:.4f} < -0.002")
+                        self.logger.debug(f"🔴 ML SELL сигнал для {symbol}: изменение {price_change_24h:.4f} < -0.0001")
                     else:
                         self.logger.debug(f"⚠️ ML SELL условие выполнено для {symbol}, но актив {base_asset} не найден в портфолио")
                 else:
-                    self.logger.debug(f"⚪ ML условия не выполнены для {symbol}: изменение {price_change_24h:.4f} в диапазоне [-0.002, 0.002]")
+                    self.logger.debug(f"⚪ ML условия не выполнены для {symbol}: изменение {price_change_24h:.4f} в диапазоне [-0.0005, 0.0005]")
             else:
-                self.logger.debug(f"📊 Техническая логика для {symbol}, ML точность: {ml_accuracy:.2f} < 0.5")
+                self.logger.debug(f"📊 Техническая логика для {symbol}, ML точность: {ml_accuracy:.2f} < 0.3")
                 # Используем простую техническую логику с более мягкими условиями
-                if price_change_24h > 0.001:  # Сильный рост 0.1% (было 0.5%)
+                if price_change_24h > 0.0003:  # Рост 0.03% (было 0.1%)
                     signal_type = 'BUY'
-                    confidence = min(0.7, abs(price_change_24h) * 50)  # Увеличиваем множитель для компенсации
+                    confidence = min(0.7, abs(price_change_24h) * 100)  # Увеличиваем множитель для компенсации
                     reason = f"Технический анализ, рост: {price_change_24h:.2%}"
-                    self.logger.debug(f"🟢 Технический BUY сигнал для {symbol}: изменение {price_change_24h:.4f} > 0.001")
-                elif price_change_24h < -0.001:  # Сильное падение 0.1% (было 0.5%)
+                    self.logger.debug(f"🟢 Технический BUY сигнал для {symbol}: изменение {price_change_24h:.4f} > 0.0003")
+                elif price_change_24h < -0.0003:  # Падение 0.03% (было 0.1%)
                     base_asset = symbol.replace('USDT', '')
                     if base_asset in portfolio and float(portfolio[base_asset]) > 0:
                         signal_type = 'SELL'
-                        confidence = min(0.7, abs(price_change_24h) * 50)  # Увеличиваем множитель для компенсации
+                        confidence = min(0.7, abs(price_change_24h) * 100)  # Увеличиваем множитель для компенсации
                         reason = f"Технический анализ, падение: {price_change_24h:.2%}"
-                        self.logger.debug(f"🔴 Технический SELL сигнал для {symbol}: изменение {price_change_24h:.4f} < -0.001")
+                        self.logger.debug(f"🔴 Технический SELL сигнал для {symbol}: изменение {price_change_24h:.4f} < -0.0003")
                     else:
                         self.logger.debug(f"⚠️ Технический SELL условие выполнено для {symbol}, но актив {base_asset} не найден в портфолио")
                 else:
-                    self.logger.debug(f"⚪ Технические условия не выполнены для {symbol}: изменение {price_change_24h:.4f} в диапазоне [-0.001, 0.001]")
+                    self.logger.debug(f"⚪ Технические условия не выполнены для {symbol}: изменение {price_change_24h:.4f} в диапазоне [-0.0003, 0.0003]")
             
             if signal_type and confidence >= self.min_confidence:
                 self.logger.info(f"🎯 Потенциальный сигнал {signal_type} для {symbol}: уверенность {confidence:.2f}")
@@ -356,7 +376,7 @@ class TradingEngine(QThread):
     log_message = Signal(str)
     status_changed = Signal(str)
     
-    def __init__(self, bybit_client, trading_enabled=False):
+    def __init__(self, bybit_client, trading_enabled=True):  # Изменено с False на True
         super().__init__()
         self.bybit_client = bybit_client
         self.running = False
@@ -367,7 +387,9 @@ class TradingEngine(QThread):
         self.signal_generator = SignalGenerator(self.logger)
         self.mutex = QMutex()
         self.last_buy_times = {}  # Словарь для отслеживания времени последних покупок
-        self.buy_cooldown = 300  # Кулдаун между покупками одного актива (5 минут)
+        self.buy_cooldown = 60  # Уменьшаем кулдаун с 5 минут до 1 минуты для более активной торговли
+        self.signals_file = Path("signals_queue.json")  # Файл для сохранения очереди сигналов
+        self.load_signals_queue()  # Загружаем сохраненную очередь при инициализации
         
     def run(self):
         """Основной торговый цикл"""
@@ -403,10 +425,20 @@ class TradingEngine(QThread):
                 except Exception as e:
                     self.log_message.emit(f"⚠️ Ошибка генерации сигналов: {e}")
                 
-                # Обрабатываем сигналы из очереди
-                if self.signals_queue:
+                # Обрабатываем сигналы из очереди (до 10 сигналов за итерацию)
+                signals_processed = 0
+                max_signals_per_iteration = 10
+                
+                while self.signals_queue and signals_processed < max_signals_per_iteration:
                     signal = self.signals_queue.pop(0)
                     self.process_signal(signal)
+                    signals_processed += 1
+                
+                if signals_processed > 0:
+                    self.log_message.emit(f"🔄 Обработано {signals_processed} сигналов, осталось в очереди: {len(self.signals_queue)}")
+                
+                # Очищаем провалившиеся сигналы из очереди
+                self.cleanup_failed_signals()
                 
                 time.sleep(10)  # Увеличиваем паузу для более стабильной работы
                 
@@ -487,13 +519,19 @@ class TradingEngine(QThread):
                     # Извлекаем минимальные значения
                     min_order_qty = float(lot_size_filter.get('minOrderQty', 0))
                     min_order_amt = float(lot_size_filter.get('minOrderAmt', 5))  # По умолчанию 5 USDT
+                    qty_step = float(lot_size_filter.get('qtyStep', lot_size_filter.get('minOrderQty', 0.00001)))
                     
-                    self.log_message.emit(f"📊 {symbol}: minOrderQty={min_order_qty}, minOrderAmt={min_order_amt}")
+                    # Если qtyStep равен 0, используем minOrderQty как шаг
+                    if qty_step == 0:
+                        qty_step = min_order_qty if min_order_qty > 0 else 0.00001
+                    
+                    self.log_message.emit(f"📊 {symbol}: minOrderQty={min_order_qty}, minOrderAmt={min_order_amt}, qtyStep={qty_step}")
                     
                     return {
                         'symbol': symbol,
                         'minOrderQty': min_order_qty,
                         'minOrderAmt': min_order_amt,
+                        'qtyStep': qty_step,
                         'basePrecision': lot_size_filter.get('basePrecision', '0.00001'),
                         'quotePrecision': lot_size_filter.get('quotePrecision', '0.0000001')
                     }
@@ -519,13 +557,15 @@ class TradingEngine(QThread):
                             # Извлекаем минимальные значения
                             min_order_qty = float(lot_size_filter.get('minOrderQty', 0))
                             min_order_amt = float(lot_size_filter.get('minOrderAmt', 5))  # По умолчанию 5 USDT
+                            qty_step = float(lot_size_filter.get('qtyStep', 0.0))
                             
-                            self.log_message.emit(f"📊 {symbol}: minOrderQty={min_order_qty}, minOrderAmt={min_order_amt}")
+                            self.log_message.emit(f"📊 {symbol}: minOrderQty={min_order_qty}, minOrderAmt={min_order_amt}, qtyStep={qty_step}")
                             
                             return {
                                 'symbol': symbol,
                                 'minOrderQty': min_order_qty,
                                 'minOrderAmt': min_order_amt,
+                                'qtyStep': qty_step,
                                 'basePrecision': lot_size_filter.get('basePrecision', '0.00001'),
                                 'quotePrecision': lot_size_filter.get('quotePrecision', '0.0000001')
                             }
@@ -545,6 +585,7 @@ class TradingEngine(QThread):
             'symbol': symbol,
             'minOrderQty': 0.00001,
             'minOrderAmt': 5.0,  # По умолчанию 5 USDT для большинства символов
+            'qtyStep': 0.00001,  # По умолчанию
             'basePrecision': '0.00001',
             'quotePrecision': '0.0000001'
         }
@@ -570,6 +611,7 @@ class TradingEngine(QThread):
             self.signals_queue.extend(filtered_signals)
             if filtered_signals:
                 self.log_message.emit(f"📊 Добавлено {len(filtered_signals)} сигналов в очередь")
+                self.save_signals_queue()  # Сохраняем изменения в файл
             if len(filtered_signals) < len(signals):
                 rejected_count = len(signals) - len(filtered_signals)
                 self.log_message.emit(f"🚫 Отклонено {rejected_count} сигналов из-за кулдауна")
@@ -668,23 +710,111 @@ class TradingEngine(QThread):
                 else:
                     self.log_message.emit("❌ Все попытки обновления портфолио исчерпаны")
     
-    def process_signal(self, signal: TradingSignal):
-        """Обработка торгового сигнала"""
+    def cleanup_failed_signals(self):
+        """Удаление провалившихся сигналов из очереди"""
         try:
+            self.mutex.lock()
+            initial_count = len(self.signals_queue)
+            
+            # Фильтруем сигналы, оставляя только те, которые не провалились
+            self.signals_queue = [signal for signal in self.signals_queue if signal.status != "FAILED"]
+            
+            removed_count = initial_count - len(self.signals_queue)
+            if removed_count > 0:
+                self.log_message.emit(f"🗑️ Удалено {removed_count} провалившихся сигналов из очереди")
+                self.save_signals_queue()  # Сохраняем изменения в файл
+        finally:
+            self.mutex.unlock()
+
+    def load_signals_queue(self):
+        """Загрузка очереди сигналов из файла"""
+        try:
+            if self.signals_file.exists():
+                with open(self.signals_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    for signal_data in data:
+                        signal = TradingSignal(
+                            symbol=signal_data['symbol'],
+                            signal=signal_data['signal'],
+                            confidence=signal_data['confidence'],
+                            price=signal_data.get('price', 0.0),
+                            reason=signal_data['reason']
+                        )
+                        signal.status = signal_data.get('status', 'PENDING')
+                        signal.execution_attempts = signal_data.get('execution_attempts', 0)
+                        self.signals_queue.append(signal)
+                    self.log_message.emit(f"📥 Загружено {len(self.signals_queue)} сигналов из файла")
+        except Exception as e:
+            self.log_message.emit(f"⚠️ Ошибка загрузки очереди сигналов: {e}")
+
+    def save_signals_queue(self):
+        """Сохранение очереди сигналов в файл"""
+        try:
+            data = []
+            for signal in self.signals_queue:
+                data.append({
+                    'symbol': signal.symbol,
+                    'signal_type': signal.signal,  # Исправляем на signal_type для консистентности
+                    'signal': signal.signal,
+                    'confidence': signal.confidence,
+                    'price': signal.price,  # Добавляем цену для правильных расчетов
+                    'reason': signal.reason,
+                    'status': signal.status,
+                    'execution_attempts': signal.execution_attempts
+                })
+            with open(self.signals_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.log_message.emit(f"⚠️ Ошибка сохранения очереди сигналов: {e}")
+
+    def process_signal(self, signal: TradingSignal):
+        """Обработка торгового сигнала с механизмом повторных попыток"""
+        try:
+            # Проверяем статус сигнала
+            if signal.status == "EXECUTED":
+                return  # Сигнал уже исполнен
+            
+            if signal.status == "FAILED":
+                return  # Сигнал провален, не обрабатываем
+            
+            # Проверяем количество попыток
+            if signal.execution_attempts >= signal.max_attempts:
+                signal.status = "FAILED"
+                self.log_message.emit(f"❌ Сигнал {signal.signal} для {signal.symbol} отклонен после {signal.max_attempts} попыток")
+                return
+            
             # Проверяем, включена ли торговля
             if not self.trading_enabled:
                 self.log_message.emit(f"⏸️ Торговля отключена. Сигнал {signal.signal} для {signal.symbol} игнорируется.")
                 return
             
-            self.log_message.emit(f"🔍 Обработка сигнала {signal.signal} для {signal.symbol} (уверенность: {signal.confidence:.2f})")
+            # Увеличиваем счетчик попыток
+            signal.execution_attempts += 1
+            signal.last_attempt_time = datetime.now()
+            signal.status = "EXECUTING"
             
+            self.log_message.emit(f"🔍 Обработка сигнала {signal.signal} для {signal.symbol} (попытка {signal.execution_attempts}/{signal.max_attempts}, уверенность: {signal.confidence:.2f})")
+            
+            success = False
             if signal.signal == 'BUY':
-                self.execute_buy_order(signal)
+                success = self.execute_buy_order(signal)
             elif signal.signal == 'SELL':
-                self.execute_sell_order(signal)
+                success = self.execute_sell_order(signal)
+            
+            # Обновляем статус на основе результата
+            if success:
+                signal.status = "EXECUTED"
+                self.log_message.emit(f"✅ Сигнал {signal.signal} для {signal.symbol} успешно исполнен")
+                self.save_signals_queue()  # Сохраняем изменения в файл
+            else:
+                signal.status = "PENDING"  # Возвращаем в ожидание для повторной попытки
+                self.log_message.emit(f"⚠️ Сигнал {signal.signal} для {signal.symbol} не исполнен (попытка {signal.execution_attempts}/{signal.max_attempts})")
+                self.save_signals_queue()  # Сохраняем изменения в файл
                 
         except Exception as e:
+            signal.status = "PENDING"  # Возвращаем в ожидание при ошибке
             self.log_message.emit(f"❌ Ошибка обработки сигнала {signal.symbol}: {e}")
+            self.save_signals_queue()  # Сохраняем изменения в файл
     
     def execute_buy_order(self, signal: TradingSignal):
         """Выполнение ордера на покупку"""
@@ -725,7 +855,7 @@ class TradingEngine(QThread):
             
             if usdt_balance < effective_min_amount:
                 self.log_message.emit(f"⚠️ Недостаточно USDT для покупки {signal.symbol}: ${usdt_balance:.2f} (минимум ${effective_min_amount})")
-                return
+                return False
             
             # Рассчитываем сумму для покупки (1% от USDT, но не менее минимума и не более максимума)
             trade_amount = max(min(usdt_balance * 0.01, max_trade_amount), effective_min_amount)
@@ -733,38 +863,48 @@ class TradingEngine(QThread):
             # Рассчитываем количество для покупки
             qty = trade_amount / signal.price
             
-            # Получаем минимальное количество из API
+            # Получаем параметры из API
             min_order_qty = instrument_info['minOrderQty']
+            qty_step = instrument_info['qtyStep']
+            
+            # Правильно округляем количество согласно qtyStep
+            if qty_step > 0:
+                import math
+                qty = math.floor(qty / qty_step) * qty_step
             
             # Проверяем, что количество не меньше минимального
             if qty < min_order_qty:
-                # Увеличиваем количество до минимального
-                qty = min_order_qty
-                # Пересчитываем сумму сделки
-                trade_amount = qty * signal.price
+                # Увеличиваем количество до минимального, округленного по qtyStep
+                if qty_step > 0:
+                    qty = math.ceil(min_order_qty / qty_step) * qty_step
+                else:
+                    qty = min_order_qty
                 self.log_message.emit(f"⚠️ Количество увеличено до минимального: {qty:.8f}")
             
-            # Округляем количество согласно точности инструмента
-            base_precision = instrument_info.get('basePrecision', '0.00001')
-            decimal_places = len(base_precision.split('.')[-1]) if '.' in base_precision else 0
-            qty = round(qty, decimal_places)
+            # Пересчитываем сумму сделки после корректировки количества
+            trade_usdt = qty * signal.price
             
-            # ВАЖНО: Пересчитываем итоговую стоимость после округления
-            final_order_value = qty * signal.price
+            # Проверяем эффективный минимум: max(minOrderQty * price, minOrderAmt)
+            effective_min_check = max(min_order_qty * signal.price, effective_min_amount)
             
-            # Проверяем, что итоговая стоимость не меньше эффективной минимальной
-            if final_order_value < effective_min_amount:
-                # Увеличиваем количество, чтобы достичь минимальной стоимости
-                qty = effective_min_amount / signal.price
-                # Снова округляем
-                qty = round(qty, decimal_places)
-                # Пересчитываем итоговую стоимость
-                final_order_value = qty * signal.price
-                trade_amount = final_order_value
-                self.log_message.emit(f"⚠️ Количество скорректировано для достижения эффективной минимальной стоимости: {qty:.8f}")
+            # Если пересчитанная сумма меньше эффективного минимума, корректируем
+            if trade_usdt < effective_min_check:
+                # Увеличиваем количество для достижения минимальной стоимости
+                qty_needed = effective_min_check / signal.price
+                if qty_step > 0:
+                    qty = math.ceil(qty_needed / qty_step) * qty_step
+                else:
+                    qty = qty_needed
+                trade_usdt = qty * signal.price
+                self.log_message.emit(f"⚠️ Количество скорректировано для эффективного минимума: {qty:.8f}")
             
-            self.log_message.emit(f"💰 ПОКУПКА {signal.symbol}: ${trade_amount:.2f} USDT ({qty:.6f} {signal.symbol.replace('USDT', '')})")
-            self.log_message.emit(f"   Цена: ${signal.price:.6f}, Итоговая стоимость: ${final_order_value:.2f}, Эффективный минимум: ${effective_min_amount:.2f}")
+            # Финальная проверка баланса
+            if trade_usdt > usdt_balance:
+                self.log_message.emit(f"⚠️ Недостаточно USDT: требуется ${trade_usdt:.2f}, доступно ${usdt_balance:.2f}")
+                return False
+            
+            self.log_message.emit(f"💰 ПОКУПКА {signal.symbol}: ${trade_usdt:.2f} USDT ({qty:.6f} {signal.symbol.replace('USDT', '')})")
+            self.log_message.emit(f"   Цена: ${signal.price:.6f}, Итоговая стоимость: ${trade_usdt:.2f}, Эффективный минимум: ${effective_min_amount:.2f}")
             self.log_message.emit(f"   Причина: {signal.reason}")
             
             # Выполняем реальный ордер
@@ -786,7 +926,7 @@ class TradingEngine(QThread):
                 trade_info = {
                     'symbol': signal.symbol,
                     'side': 'BUY',
-                    'amount': trade_amount,
+                    'amount': trade_usdt,
                     'qty': qty,
                     'price': signal.price,
                     'confidence': signal.confidence,
@@ -795,12 +935,15 @@ class TradingEngine(QThread):
                     'timestamp': datetime.now().isoformat()
                 }
                 self.trade_executed.emit(trade_info)
+                return True
             else:
                 error_msg = order_result.get('retMsg', 'Неизвестная ошибка') if order_result else 'Нет ответа от API'
                 self.log_message.emit(f"❌ Ошибка размещения ордера на покупку {signal.symbol}: {error_msg}")
+                return False
             
         except Exception as e:
             self.log_message.emit(f"❌ Ошибка выполнения покупки {signal.symbol}: {e}")
+            return False
     
     def execute_sell_order(self, signal: TradingSignal):
         """Выполнение ордера на продажу"""
@@ -810,22 +953,35 @@ class TradingEngine(QThread):
             
             if asset_balance <= 0:
                 self.log_message.emit(f"⚠️ Недостаточно {base_asset} для продажи: {asset_balance}")
-                return
+                return False
+            
+            # Получаем информацию об инструменте для правильного округления
+            instrument_info = self.get_instrument_info(signal.symbol)
+            min_order_qty = instrument_info['minOrderQty']
+            qty_step = instrument_info['qtyStep']
             
             # Продаем 50% от имеющегося количества
             sell_amount = asset_balance * 0.5
             
-            # Округляем количество для продажи с учетом цены монеты
-            if signal.price > 1000:  # BTC, ETH и другие дорогие монеты
-                sell_amount = round(sell_amount, 6)
-            elif signal.price > 1:   # Большинство альткоинов
-                sell_amount = round(sell_amount, 4)
-            else:                    # Дешевые монеты
-                sell_amount = round(sell_amount, 2)
+            # Правильно округляем количество согласно qtyStep
+            if qty_step > 0:
+                import math
+                sell_amount = math.floor(sell_amount / qty_step) * qty_step
             
+            # Проверяем, что количество не меньше минимального
+            if sell_amount < min_order_qty:
+                self.log_message.emit(f"⚠️ Количество для продажи {sell_amount:.8f} меньше минимального {min_order_qty:.8f}")
+                return False
+            
+            # Проверяем минимальную стоимость ордера
             estimated_usdt = sell_amount * signal.price
+            min_order_amt = instrument_info['minOrderAmt']
             
-            self.log_message.emit(f"💸 ПРОДАЖА {signal.symbol}: {sell_amount:.6f} {base_asset} ≈ ${estimated_usdt:.2f}")
+            if estimated_usdt < min_order_amt:
+                self.log_message.emit(f"⚠️ Стоимость продажи ${estimated_usdt:.2f} меньше минимальной ${min_order_amt:.2f}")
+                return False
+            
+            self.log_message.emit(f"💸 ПРОДАЖА {signal.symbol}: {sell_amount:.8f} {base_asset} ≈ ${estimated_usdt:.2f}")
             self.log_message.emit(f"   Цена: ${signal.price:.6f}, Причина: {signal.reason}")
             
             # Выполняем реальный ордер
@@ -853,12 +1009,15 @@ class TradingEngine(QThread):
                     'timestamp': datetime.now().isoformat()
                 }
                 self.trade_executed.emit(trade_info)
+                return True
             else:
                 error_msg = order_result.get('retMsg', 'Неизвестная ошибка') if order_result else 'Нет ответа от API'
                 self.log_message.emit(f"❌ Ошибка размещения ордера на продажу {signal.symbol}: {error_msg}")
+                return False
             
         except Exception as e:
             self.log_message.emit(f"❌ Ошибка выполнения продажи {signal.symbol}: {e}")
+            return False
     
     def stop(self):
         """Остановка торгового движка"""
@@ -1200,12 +1359,56 @@ class TraderMainWindow(QMainWindow):
         total_trades = len(self.trade_history)
         self.total_trades_label.setText(str(total_trades))
         
-        # Пока что считаем все сделки успешными (симуляция)
-        self.successful_trades_label.setText(str(total_trades))
+        # Подсчет успешных сделок (сделки с order_id считаются успешными)
+        successful_trades = sum(1 for trade in self.trade_history if trade.get('order_id'))
+        self.successful_trades_label.setText(str(successful_trades))
         
-        # Расчет прибыли (упрощенный)
-        total_profit = 0.0  # Пока что $0
+        # Расчет прибыли на основе покупок и продаж
+        total_profit = self.calculate_total_profit()
         self.total_profit_label.setText(f"${total_profit:.2f}")
+    
+    def calculate_total_profit(self):
+        """Расчет общей прибыли на основе истории сделок"""
+        profit = 0.0
+        symbol_positions = {}  # Отслеживаем позиции по символам
+        
+        for trade in self.trade_history:
+            if not trade.get('order_id'):  # Пропускаем неуспешные сделки
+                continue
+                
+            symbol = trade['symbol']
+            side = trade['side']
+            
+            if symbol not in symbol_positions:
+                symbol_positions[symbol] = {'qty': 0, 'total_cost': 0, 'total_sold': 0}
+            
+            if side == 'BUY':
+                # При покупке увеличиваем количество и общую стоимость
+                qty = trade['qty']
+                cost = trade['amount']  # amount в USDT для покупки
+                symbol_positions[symbol]['qty'] += qty
+                symbol_positions[symbol]['total_cost'] += cost
+                
+            elif side == 'SELL':
+                # При продаже рассчитываем прибыль
+                qty_sold = trade['amount']  # amount в базовой валюте для продажи
+                usdt_received = trade.get('estimated_usdt', 0)
+                
+                if symbol_positions[symbol]['qty'] > 0:
+                    # Рассчитываем среднюю цену покупки
+                    avg_buy_price = symbol_positions[symbol]['total_cost'] / symbol_positions[symbol]['qty']
+                    cost_of_sold = qty_sold * avg_buy_price
+                    
+                    # Прибыль = полученные USDT - стоимость проданных монет
+                    trade_profit = usdt_received - cost_of_sold
+                    profit += trade_profit
+                    
+                    # Обновляем позицию
+                    symbol_positions[symbol]['qty'] -= qty_sold
+                    symbol_positions[symbol]['total_cost'] -= cost_of_sold
+                    symbol_positions[symbol]['total_sold'] += usdt_received
+        
+        return profit
     
     def on_trading_status_changed(self, status: str):
         """Обработка изменения статуса торговли"""
@@ -1252,7 +1455,7 @@ class TraderMainWindow(QMainWindow):
         
         # Автопрокрутка к концу
         cursor = self.log_text.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.movePosition(QTextCursor.MoveOperation.End)
         self.log_text.setTextCursor(cursor)
     
     def auto_start_trading(self):

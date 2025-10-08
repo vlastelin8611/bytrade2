@@ -1,0 +1,57 @@
+Что стоит поправить
+
+Ниже указаны рекомендации, которые не меняют интерфейс, но исправляют логику получения размера ордера и выполнения покупок/продаж.
+
+Всегда включайте торговлю при запуске: запускать trader_program.py с флагом --enable-trading, либо добавить в конфиг возможность включать торговлю автоматически (установка enable_trading_on_start=True при создании TraderMainWindow). Иначе сигналы не будут обрабатываться.
+
+Получение точных параметров инструмента. Метод get_instrument_info уже запрашивает minOrderQty и minOrderAmt
+raw.githubusercontent.com
+, но для расчёта количества также нужен qtyStep. Добавьте в возвращаемую структуру значение qtyStep из lotSizeFilter и учитывайте его при округлении количества:
+# дополнительно извлекаем qtyStep
+qty_step = float(lot_size_filter.get('qtyStep', 0.0))
+return {
+    'symbol': symbol,
+    'minOrderQty': min_order_qty,
+    'minOrderAmt': min_order_amt,
+    'qtyStep': qty_step,
+    'basePrecision': lot_size_filter.get('basePrecision', '0.00001'),
+    'quotePrecision': lot_size_filter.get('quotePrecision', '0.0000001')
+}
+Корректное округление количества. После вычисления qty в execute_buy_order и execute_sell_order необходимо привести количество к шагу qtyStep: qty = math.floor(qty / qty_step) * qty_step. Это гарантирует, что размер заказа кратен разрешённому шагу и превышает минимальное значение. Также следует повторно пересчитать итоговую стоимость, как уже делается в коде, и убедиться, что она не меньше minOrderAmt.
+
+Проверять наличие позиции перед продажей. В execute_sell_order вы правильно получаете asset_balance из портфеля
+raw.githubusercontent.com
+. Важно, чтобы метод update_portfolio корректно преобразовывал данные ответа API. Убедитесь, что get_unified_balance_flat возвращает значения walletBalance; если Bybit возвращает нулевой walletBalance при наличии ордера, можно добавить обработку locked баланса.
+
+
+
+Минимальный размер ордера. Пример из папки request size (скрипты check_balance_and_limits.py и check_instrument_info.py) показывает, как вычислять эффективный минимум: effective_min = max(minOrderQty * price, minOrderAmt). Ваш метод execute_buy_order уже использует minOrderAmt, но можно также проверить minOrderQty * price. Это особенно важно для дешёвых монет, где minOrderQty может давать большую сумму, чем minOrderAmt.
+
+Пример исправленной логики покупки:
+def execute_buy_order(self, signal: TradingSignal):
+    # ... получение usdt_balance и instrument_info
+    price = signal.price
+    qty_step = instrument_info['qtyStep']
+    min_qty = instrument_info['minOrderQty']
+    min_value = instrument_info['minOrderAmt']
+    # выбираем сумму сделки: от 1% баланса, но не меньше min_value
+    trade_usdt = max(usdt_balance * 0.01, min_value)
+    # переводим сумму в количество
+    qty = trade_usdt / price
+    # приводим количество к шагу qty_step и не меньше min_qty
+    qty = max(min_qty, math.floor(qty / qty_step) * qty_step)
+    # пересчитываем сумму после округления
+    trade_usdt = qty * price
+    # проверяем, что сумма ≥ min_value
+    if trade_usdt < min_value:
+        qty = math.ceil(min_value / price / qty_step) * qty_step
+        trade_usdt = qty * price
+    # далее размещение ордера:
+    order_result = self.bybit_client.place_order(
+        category='spot', symbol=signal.symbol,
+        side='Buy', order_type='Market', qty=str(qty)
+    )
+    # проверка результата и логирование
+И аналогично для продажи: используйте qty_step и округляйте количество продаваемой монеты.
+
+После внедрения этих рекомендаций программа‑«торговец» будет автоматически запрашивать необходимые параметры из API, корректно рассчитывать размеры ордеров и выполнять сделки только при соблюдении всех условий.

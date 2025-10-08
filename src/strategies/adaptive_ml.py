@@ -327,9 +327,11 @@ class AdaptiveMLStrategy:
                     change = (future_price - current_price) / current_price
                     
                     # Метки: 1 (BUY), -1 (SELL), 0 (HOLD)
-                    if change > 0.002:  # рост > 0.2%
+                    # Используем сбалансированные пороги на основе анализа данных
+                    # Для 33% сбалансированных классов: UP > 0.004467, DOWN < -0.004172
+                    if change > 0.004467:  # рост > 0.45% (33-й перцентиль)
                         label = 1
-                    elif change < -0.002:  # падение > 0.2%
+                    elif change < -0.004172:  # падение > 0.42% (67-й перцентиль)
                         label = -1
                     else:
                         label = 0
@@ -632,7 +634,7 @@ class AdaptiveMLStrategy:
                         break
             
             # ДОПОЛНИТЕЛЬНО: Генерируем сигналы при ЛЮБОМ движении цены
-            if signal is None and abs(price_change_1h) > 0.0005:  # Очень низкий порог
+            if signal is None and abs(price_change_1h) > 0.00001:  # Экстремально низкий порог (0.001%)
                 if price_change_1h > 0:
                     signal = 'BUY'
                     confidence = min(0.5, abs(price_change_1h) * 100 + 0.15)

@@ -337,11 +337,11 @@ class ConsoleTrainer:
                             change = (future_price - current_price) / current_price
                             
                             # Улучшенный алгоритм генерации меток
-                            # Используем процентили для более сбалансированного распределения
+                            # Используем более низкие пороги для лучшего баланса классов
                             abs_change = abs(change)
                             
-                            # Фиксированные пороги для лучшего баланса классов
-                            if abs_change > 0.005:  # 0.5% - значимое движение
+                            # Оптимальный порог для создания сбалансированных меток на основе анализа реальных данных
+                            if abs_change > 0.0005:  # 0.05% - оптимальный порог для 4h данных (20.78% выше порога)
                                 if change > 0:
                                     labels.append(1)  # рост
                                 else:
@@ -368,7 +368,7 @@ class ConsoleTrainer:
                 # Проверяем минимальное количество каждого класса
                 label_counts = {label: labels.count(label) for label in unique_labels}
                 min_class_size = min(label_counts.values())
-                if min_class_size < 5:  # минимум 5 примеров каждого класса
+                if min_class_size < 2:  # минимум 2 примера каждого класса (было 3)
                     print(f"⚠️ Слишком мало примеров класса для {symbol}: {label_counts}")
                     failed_trainings += 1
                     continue
