@@ -14,6 +14,7 @@ from pathlib import Path
 import pickle
 import json
 import time
+import shutil
 
 try:
     from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
@@ -842,7 +843,7 @@ class AdaptiveMLStrategy:
             return False
     
     def load_models(self):
-        """Загрузка сохраненных моделей"""
+        """Загрузка сохраненных моделей с защитой от повреждения"""
         try:
             self.logger.info("🔍 Начало загрузки моделей...")
             models_file = self.model_path / f"{self.name}_models.pkl"
@@ -853,42 +854,51 @@ class AdaptiveMLStrategy:
                 f"📁 Проверка файлов: {models_file.name}, {scalers_file.name}, {performance_file.name}, {training_state_file.name}"
             )
 
+            # Load models with backup protection
             if models_file.exists():
                 self.logger.info("📊 Загрузка моделей...")
-                with open(models_file, 'rb') as f:
-                    self.models = pickle.load(f)
-                self.logger.info(f"Загружено {len(self.models)} моделей")
+                self.models = self._load_pickle_with_backup(models_file, "models")
+                if self.models:
+                    self.logger.info(f"Загружено {len(self.models)} моделей")
+                else:
+                    self.logger.warning("❌ Не удалось загрузить модели")
             else:
                 self.logger.info("❌ Файл моделей не найден")
 
+            # Load scalers with backup protection
             if scalers_file.exists():
                 self.logger.info("📏 Загрузка скейлеров...")
-                with open(scalers_file, 'rb') as f:
-                    self.scalers = pickle.load(f)
+                self.scalers = self._load_pickle_with_backup(scalers_file, "scalers")
+                if not self.scalers:
+                    self.logger.warning("❌ Не удалось загрузить скейлеры")
             else:
                 self.logger.info("❌ Файл скейлеров не найден")
 
+            # Load performance with backup protection
             if performance_file.exists():
                 self.logger.info("📈 Загрузка статистики производительности...")
-                with open(performance_file, 'r') as f:
-                    self.model_performance = json.load(f)
+                self.model_performance = self._load_json_with_backup(performance_file, "performance")
+                if not self.model_performance:
+                    self.logger.warning("❌ Не удалось загрузить статистику производительности")
             else:
                 self.logger.info("❌ Файл статистики не найден")
 
+            # Load training state with backup protection
             if training_state_file.exists():
                 self.logger.info("📈 Загрузка состояния обучения моделей...")
-                with open(training_state_file, 'r') as f:
-                    stored_state = json.load(f)
-
-                if isinstance(stored_state, dict):
-                    self.performance = stored_state
-                    for symbol, metrics in stored_state.items():
-                        if isinstance(metrics, dict):
-                            accuracy = metrics.get('accuracy')
-                            if accuracy is not None:
-                                self.model_performance[symbol] = accuracy
+                training_state = self._load_json_with_backup(training_state_file, "training_state")
+                if training_state:
+                    if isinstance(training_state, dict):
+                        self.performance = training_state
+                        for symbol, metrics in training_state.items():
+                            if isinstance(metrics, dict):
+                                accuracy = metrics.get('accuracy')
+                                if accuracy is not None:
+                                    self.model_performance[symbol] = accuracy
+                    else:
+                        self.logger.warning("Некорректный формат файла состояния обучения")
                 else:
-                    self.logger.warning("Некорректный формат файла состояния обучения")
+                    self.logger.warning("❌ Не удалось загрузить состояние обучения")
             else:
                 # Обеспечиваем обратную совместимость
                 self.performance = {
@@ -908,30 +918,136 @@ class AdaptiveMLStrategy:
         except Exception as e:
             self.logger.error(f"Ошибка загрузки моделей: {e}")
 
+    def _load_pickle_with_backup(self, file_path: Path, data_type: str) -> Any:
+        """Загрузка pickle файла с защитой от повреждения"""
+        backup_path = file_path.with_suffix('.pkl.backup')
+        
+        # Try to load main file
+        try:
+            with open(file_path, 'rb') as f:
+                data = pickle.load(f)
+            self.logger.info(f"✅ Успешно загружен {data_type} из основного файла")
+            return data
+        except Exception as e:
+            self.logger.warning(f"⚠️ Ошибка загрузки основного файла {data_type}: {e}")
+            
+            # Try to load backup file
+            if backup_path.exists():
+                try:
+                    with open(backup_path, 'rb') as f:
+                        data = pickle.load(f)
+                    self.logger.info(f"✅ Успешно загружен {data_type} из резервной копии")
+                    
+                    # Restore main file from backup
+                    shutil.copy2(backup_path, file_path)
+                    self.logger.info(f"🔄 Основной файл {data_type} восстановлен из резервной копии")
+                    return data
+                except Exception as backup_e:
+                    self.logger.error(f"❌ Ошибка загрузки резервной копии {data_type}: {backup_e}")
+            else:
+                self.logger.warning(f"❌ Резервная копия {data_type} не найдена")
+        
+        return None
+
+    def _load_json_with_backup(self, file_path: Path, data_type: str) -> Any:
+        """Загрузка JSON файла с защитой от повреждения"""
+        backup_path = file_path.with_suffix('.json.backup')
+        
+        # Try to load main file
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            self.logger.info(f"✅ Успешно загружен {data_type} из основного файла")
+            return data
+        except Exception as e:
+            self.logger.warning(f"⚠️ Ошибка загрузки основного файла {data_type}: {e}")
+            
+            # Try to load backup file
+            if backup_path.exists():
+                try:
+                    with open(backup_path, 'r') as f:
+                        data = json.load(f)
+                    self.logger.info(f"✅ Успешно загружен {data_type} из резервной копии")
+                    
+                    # Restore main file from backup
+                    shutil.copy2(backup_path, file_path)
+                    self.logger.info(f"🔄 Основной файл {data_type} восстановлен из резервной копии")
+                    return data
+                except Exception as backup_e:
+                    self.logger.error(f"❌ Ошибка загрузки резервной копии {data_type}: {backup_e}")
+            else:
+                self.logger.warning(f"❌ Резервная копия {data_type} не найдена")
+        
+        return None
+
     def save_models(self):
-        """Сохранение моделей"""
+        """Сохранение моделей с резервным копированием"""
         try:
             models_file = self.model_path / f"{self.name}_models.pkl"
             scalers_file = self.model_path / f"{self.name}_scalers.pkl"
             performance_file = self.model_path / f"{self.name}_performance.json"
             training_state_file = self.model_path / f"{self.name}_training_state.json"
 
-            with open(models_file, 'wb') as f:
-                pickle.dump(self.models, f)
+            # Save with backup protection
+            self._save_pickle_with_backup(models_file, self.models, "models")
+            self._save_pickle_with_backup(scalers_file, self.scalers, "scalers")
+            self._save_json_with_backup(performance_file, self.model_performance, "performance")
+            self._save_json_with_backup(training_state_file, self.performance, "training_state")
 
-            with open(scalers_file, 'wb') as f:
-                pickle.dump(self.scalers, f)
-
-            with open(performance_file, 'w') as f:
-                json.dump(self.model_performance, f)
-
-            with open(training_state_file, 'w') as f:
-                json.dump(self.performance, f)
-
-            self.logger.info("Модели сохранены")
+            self.logger.info("✅ Модели сохранены с резервными копиями")
 
         except Exception as e:
-            self.logger.error(f"Ошибка сохранения моделей: {e}")
+            self.logger.error(f"❌ Ошибка сохранения моделей: {e}")
+
+    def _save_pickle_with_backup(self, file_path: Path, data: Any, data_type: str):
+        """Сохранение pickle файла с резервным копированием"""
+        backup_path = file_path.with_suffix('.pkl.backup')
+        temp_path = file_path.with_suffix('.pkl.temp')
+        
+        try:
+            # Save to temporary file first
+            with open(temp_path, 'wb') as f:
+                pickle.dump(data, f)
+            
+            # Create backup if main file exists
+            if file_path.exists():
+                shutil.copy2(file_path, backup_path)
+            
+            # Move temp file to main file
+            shutil.move(temp_path, file_path)
+            
+            self.logger.debug(f"💾 {data_type} сохранен с резервной копией")
+            
+        except Exception as e:
+            # Clean up temp file if it exists
+            if temp_path.exists():
+                temp_path.unlink()
+            raise e
+
+    def _save_json_with_backup(self, file_path: Path, data: Any, data_type: str):
+        """Сохранение JSON файла с резервным копированием"""
+        backup_path = file_path.with_suffix('.json.backup')
+        temp_path = file_path.with_suffix('.json.temp')
+        
+        try:
+            # Save to temporary file first
+            with open(temp_path, 'w') as f:
+                json.dump(data, f)
+            
+            # Create backup if main file exists
+            if file_path.exists():
+                shutil.copy2(file_path, backup_path)
+            
+            # Move temp file to main file
+            shutil.move(temp_path, file_path)
+            
+            self.logger.debug(f"💾 {data_type} сохранен с резервной копией")
+            
+        except Exception as e:
+            # Clean up temp file if it exists
+            if temp_path.exists():
+                temp_path.unlink()
+            raise e
     
     def get_performance_stats(self) -> Dict[str, Any]:
         """Получение статистики производительности"""

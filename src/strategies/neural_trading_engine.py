@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
+import shutil  # ADDED: For backup functionality
 
 try:
     from sklearn.preprocessing import StandardScaler
@@ -58,34 +59,104 @@ class NeuralTradingEngine:
         self._initialize_indicators()
         
     def _load_neural_models(self):
-        """Загрузка обученных нейросетевых моделей"""
+        """Загрузка обученных нейросетевых моделей с защитой от повреждения"""
         try:
             models_path = Path("src/strategies/models")
             
-            # Загружаем модели
+            # Загружаем модели с защитой от повреждения
             models_file = models_path / "adaptive_ml_models.pkl"
             scalers_file = models_path / "adaptive_ml_scalers.pkl"
             performance_file = models_path / "adaptive_ml_performance.json"
             
             if models_file.exists():
                 import pickle
-                with open(models_file, 'rb') as f:
-                    self.neural_models = pickle.load(f)
-                self.logger.info(f"Загружено {len(self.neural_models)} нейросетевых моделей")
+                self.neural_models = self._load_pickle_with_backup(models_file, "neural_models")
+                if self.neural_models:
+                    self.logger.info(f"Загружено {len(self.neural_models)} нейросетевых моделей")
+                else:
+                    self.logger.warning("❌ Не удалось загрузить нейросетевые модели")
             
             if scalers_file.exists():
-                with open(scalers_file, 'rb') as f:
-                    self.neural_scalers = pickle.load(f)
-                self.logger.info(f"Загружено {len(self.neural_scalers)} скейлеров")
+                self.neural_scalers = self._load_pickle_with_backup(scalers_file, "neural_scalers")
+                if self.neural_scalers:
+                    self.logger.info(f"Загружено {len(self.neural_scalers)} скейлеров")
+                else:
+                    self.logger.warning("❌ Не удалось загрузить скейлеры")
             
             if performance_file.exists():
-                with open(performance_file, 'r') as f:
-                    self.neural_performance = json.load(f)
-                self.logger.info(f"Загружена статистика по {len(self.neural_performance)} символам")
+                self.neural_performance = self._load_json_with_backup(performance_file, "neural_performance")
+                if self.neural_performance:
+                    self.logger.info(f"Загружена статистика по {len(self.neural_performance)} символам")
+                else:
+                    self.logger.warning("❌ Не удалось загрузить статистику производительности")
                 
         except Exception as e:
             self.logger.error(f"Ошибка загрузки нейросетевых моделей: {e}")
     
+    def _load_pickle_with_backup(self, file_path: Path, data_type: str) -> Any:
+        """Загрузка pickle файла с защитой от повреждения"""
+        backup_path = file_path.with_suffix('.pkl.backup')
+        
+        # Try to load main file
+        try:
+            import pickle
+            with open(file_path, 'rb') as f:
+                data = pickle.load(f)
+            self.logger.info(f"✅ Успешно загружен {data_type} из основного файла")
+            return data
+        except Exception as e:
+            self.logger.warning(f"⚠️ Ошибка загрузки основного файла {data_type}: {e}")
+            
+            # Try to load backup file
+            if backup_path.exists():
+                try:
+                    import pickle
+                    with open(backup_path, 'rb') as f:
+                        data = pickle.load(f)
+                    self.logger.info(f"✅ Успешно загружен {data_type} из резервной копии")
+                    
+                    # Restore main file from backup
+                    shutil.copy2(backup_path, file_path)
+                    self.logger.info(f"🔄 Основной файл {data_type} восстановлен из резервной копии")
+                    return data
+                except Exception as backup_e:
+                    self.logger.error(f"❌ Ошибка загрузки резервной копии {data_type}: {backup_e}")
+            else:
+                self.logger.warning(f"❌ Резервная копия {data_type} не найдена")
+        
+        return None
+
+    def _load_json_with_backup(self, file_path: Path, data_type: str) -> Any:
+        """Загрузка JSON файла с защитой от повреждения"""
+        backup_path = file_path.with_suffix('.json.backup')
+        
+        # Try to load main file
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            self.logger.info(f"✅ Успешно загружен {data_type} из основного файла")
+            return data
+        except Exception as e:
+            self.logger.warning(f"⚠️ Ошибка загрузки основного файла {data_type}: {e}")
+            
+            # Try to load backup file
+            if backup_path.exists():
+                try:
+                    with open(backup_path, 'r') as f:
+                        data = json.load(f)
+                    self.logger.info(f"✅ Успешно загружен {data_type} из резервной копии")
+                    
+                    # Restore main file from backup
+                    shutil.copy2(backup_path, file_path)
+                    self.logger.info(f"🔄 Основной файл {data_type} восстановлен из резервной копии")
+                    return data
+                except Exception as backup_e:
+                    self.logger.error(f"❌ Ошибка загрузки резервной копии {data_type}: {backup_e}")
+            else:
+                self.logger.warning(f"❌ Резервная копия {data_type} не найдена")
+        
+        return None
+
     def _initialize_indicators(self):
         """Инициализация технических индикаторов"""
         self.indicators = {

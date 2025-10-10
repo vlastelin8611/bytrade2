@@ -113,8 +113,16 @@ class BybitClient:
             pass
         return int(time.time() * 1000)
     
-    def _make_request(self, method: str, endpoint: str, params: Dict = None, body: Dict = None) -> Dict:
-        """Выполнение HTTP запроса к API"""
+    def _make_request(self, method: str, endpoint: str, params: Dict = None, body: Dict = None, return_full_response: bool = False) -> Dict:
+        """Выполнение HTTP запроса к API
+        
+        Args:
+            method: HTTP метод (GET, POST)
+            endpoint: API endpoint
+            params: Параметры запроса
+            body: Тело запроса для POST
+            return_full_response: Если True, возвращает полный ответ с retCode, иначе только result
+        """
         self.rate_limiter.wait_if_needed()
         
         url = f"{self.base_url}{endpoint}"
@@ -150,18 +158,43 @@ class BybitClient:
         }
         
         try:
-            if method.upper() == 'GET':
-                response = self.session.get(url, params=params, headers=headers, timeout=10)
-            elif method.upper() == 'POST':
-                request_body = body if body is not None else params
-                response = self.session.post(url, data=body_str if body_str else None, json=request_body if not body_str else None, headers=headers, timeout=10)
-            else:
-                raise ValueError(f"Неподдерживаемый HTTP метод: {method}")
+            # Retry логика для сетевых ошибок
+            max_retries = 3
+            retry_delay = 1  # секунды
             
-            response.raise_for_status()
+            for attempt in range(max_retries):
+                try:
+                    if method.upper() == 'GET':
+                        response = self.session.get(url, params=params, headers=headers, timeout=15)  # Увеличен таймаут
+                    elif method.upper() == 'POST':
+                        request_body = body if body is not None else params
+                        response = self.session.post(url, data=body_str if body_str else None, json=request_body if not body_str else None, headers=headers, timeout=15)  # Увеличен таймаут
+                    else:
+                        raise ValueError(f"Неподдерживаемый HTTP метод: {method}")
+                    
+                    response.raise_for_status()
+                    break  # Успешный запрос, выходим из цикла retry
+                    
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.HTTPError) as e:
+                    if attempt < max_retries - 1:  # Не последняя попытка
+                        self.logger.warning(f"Сетевая ошибка (попытка {attempt + 1}/{max_retries}): {e}. Повтор через {retry_delay} сек...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Экспоненциальная задержка
+                        continue
+                    else:
+                        raise  # Последняя попытка, пробрасываем ошибку
+            
             data = response.json()
             
-            # Проверка ответа API
+            # Логирование для отладки
+            if endpoint == '/v5/order/create':
+                self.logger.info(f"API ответ для создания ордера: retCode={data.get('retCode')}, retMsg={data.get('retMsg')}")
+            
+            # Если запрошен полный ответ, возвращаем его без проверки retCode
+            if return_full_response:
+                return data
+            
+            # Проверка ответа API только для обычных запросов
             if data.get('retCode') != 0:
                 error_msg = data.get('retMsg', 'Неизвестная ошибка API')
                 self.logger.error(f"API ошибка: {error_msg}")
@@ -582,7 +615,11 @@ class BybitClient:
     
     def place_order(self, category: str, symbol: str, side: str, order_type: str, 
                    qty: str, price: str = None, **kwargs) -> Dict:
-        """Размещение ордера"""
+        """Размещение ордера
+        
+        Returns:
+            Dict: Полный ответ API с retCode для корректной проверки успешности
+        """
         params = {
             'category': category,
             'symbol': symbol,
@@ -597,7 +634,8 @@ class BybitClient:
         # Дополнительные параметры
         params.update(kwargs)
         
-        result = self._make_request('POST', '/v5/order/create', params)
+        # Возвращаем полный ответ с retCode для корректной проверки
+        result = self._make_request('POST', '/v5/order/create', params, return_full_response=True)
         return result
     
     def cancel_order(self, category: str, symbol: str, order_id: str = None, 

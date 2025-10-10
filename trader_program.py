@@ -35,7 +35,8 @@ try:
         QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, 
         QPushButton, QLabel, QTextEdit, QGroupBox, QGridLayout,
         QProgressBar, QStatusBar, QFrame, QSplitter, QTableWidget,
-        QTableWidgetItem, QHeaderView, QSpacerItem, QSizePolicy
+        QTableWidgetItem, QHeaderView, QSpacerItem, QSizePolicy,
+        QTabWidget
     )
     from PySide6.QtCore import QTimer, QThread, Signal, Qt, QMutex
     from PySide6.QtGui import QFont, QColor, QPalette, QTextCursor
@@ -1027,7 +1028,7 @@ class TradingEngine(QThread):
 class TraderMainWindow(QMainWindow):
     """Главное окно программы-торговца"""
     
-    def __init__(self, enable_trading=False):
+    def __init__(self, enable_trading=True):  # Изменено с False на True для включения торговли по умолчанию
         super().__init__()
         self.setWindowTitle("🤖 Программа-торговец - Автоматическая торговля")
         self.setGeometry(100, 100, 1200, 800)
@@ -1100,6 +1101,29 @@ class TraderMainWindow(QMainWindow):
         control_panel = self.create_control_panel()
         main_layout.addWidget(control_panel)
         
+        # Создание системы вкладок
+        self.tab_widget = QTabWidget()
+        
+        # Вкладка "Торговля"
+        trading_tab = self.create_trading_tab()
+        self.tab_widget.addTab(trading_tab, "📊 Торговля")
+        
+        # Вкладка "История сделок"
+        history_tab = self.create_history_tab()
+        self.tab_widget.addTab(history_tab, "📈 История сделок")
+        
+        main_layout.addWidget(self.tab_widget)
+        
+        # Статусная строка
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("🔴 Торговля остановлена")
+    
+    def create_trading_tab(self) -> QWidget:
+        """Создание вкладки торговли"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
         # Основная область с разделителем
         splitter = QSplitter(Qt.Horizontal)
         
@@ -1112,12 +1136,86 @@ class TraderMainWindow(QMainWindow):
         splitter.addWidget(right_panel)
         
         splitter.setSizes([600, 600])
-        main_layout.addWidget(splitter)
+        layout.addWidget(splitter)
         
-        # Статусная строка
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("🔴 Торговля остановлена")
+        return widget
+    
+    def create_history_tab(self) -> QWidget:
+        """Создание вкладки истории сделок"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Заголовок
+        title_label = QLabel("📈 История торговых операций")
+        title_label.setFont(QFont("Arial", 14, QFont.Bold))
+        title_label.setStyleSheet("color: #2c3e50; margin: 10px;")
+        layout.addWidget(title_label)
+        
+        # Таблица истории сделок
+        self.history_table = QTableWidget()
+        self.history_table.setColumnCount(7)
+        self.history_table.setHorizontalHeaderLabels([
+            "Время", "Символ", "Операция", "Объем", "Цена", "Прибыль/Убыток", "Статус"
+        ])
+        
+        # Настройка таблицы
+        header = self.history_table.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.resizeSection(0, 150)  # Время
+        header.resizeSection(1, 100)  # Символ
+        header.resizeSection(2, 80)   # Операция
+        header.resizeSection(3, 100)  # Объем
+        header.resizeSection(4, 100)  # Цена
+        header.resizeSection(5, 120)  # Прибыль/Убыток
+        
+        self.history_table.setAlternatingRowColors(True)
+        self.history_table.setStyleSheet("""
+            QTableWidget {
+                gridline-color: #bdc3c7;
+                background-color: white;
+                alternate-background-color: #f8f9fa;
+            }
+            QTableWidget::item {
+                padding: 8px;
+            }
+            QHeaderView::section {
+                background-color: #34495e;
+                color: white;
+                padding: 8px;
+                font-weight: bold;
+            }
+        """)
+        
+        layout.addWidget(self.history_table)
+        
+        # Панель статистики внизу
+        stats_panel = QGroupBox("📊 Статистика торговли")
+        stats_layout = QHBoxLayout(stats_panel)
+        
+        # Статистика сделок
+        self.history_total_trades = QLabel("Всего сделок: 0")
+        self.history_successful_trades = QLabel("Успешных: 0")
+        self.history_total_profit = QLabel("Общая прибыль: $0.00")
+        self.history_win_rate = QLabel("Процент успеха: 0%")
+        
+        for label in [self.history_total_trades, self.history_successful_trades, 
+                     self.history_total_profit, self.history_win_rate]:
+            label.setStyleSheet("""
+                QLabel {
+                    font-size: 12px;
+                    font-weight: bold;
+                    padding: 5px;
+                    margin: 5px;
+                    border: 1px solid #bdc3c7;
+                    border-radius: 3px;
+                    background-color: #ecf0f1;
+                }
+            """)
+            stats_layout.addWidget(label)
+        
+        layout.addWidget(stats_panel)
+        
+        return widget
     
     def create_control_panel(self) -> QWidget:
         """Создание панели управления"""
@@ -1292,10 +1390,10 @@ class TraderMainWindow(QMainWindow):
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         
-        # Отключаем торговлю в движке
+        # Торговля остается включенной в движке для автоматической работы
         if self.trading_engine:
-            self.trading_engine.trading_enabled = False
-            self.add_log("⏹️ Торговля отключена в движке")
+            # self.trading_engine.trading_enabled = False  # УБРАНО: не отключаем торговлю при остановке потока
+            self.add_log("⏹️ Поток остановлен, торговля остается активной")
         
         # Останавливаем потоки
         if self.data_collector.isRunning():
@@ -1341,6 +1439,7 @@ class TraderMainWindow(QMainWindow):
         """Обработка выполненной сделки"""
         self.trade_history.append(trade_info)
         self.update_statistics()
+        self.add_trade_to_history_table(trade_info)
         
         # Логируем сделку
         symbol = trade_info['symbol']
@@ -1457,6 +1556,73 @@ class TraderMainWindow(QMainWindow):
         cursor = self.log_text.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.log_text.setTextCursor(cursor)
+    
+    def add_trade_to_history_table(self, trade_info: Dict):
+        """Добавление сделки в таблицу истории"""
+        try:
+            # Получаем текущее количество строк
+            row_count = self.history_table.rowCount()
+            
+            # Ограничиваем количество записей (например, 100)
+            if row_count >= 100:
+                self.history_table.removeRow(0)  # Удаляем самую старую запись
+                row_count = self.history_table.rowCount()
+            
+            # Добавляем новую строку
+            self.history_table.insertRow(row_count)
+            
+            # Заполняем данные
+            timestamp = trade_info.get('timestamp', datetime.now().strftime("%H:%M:%S"))
+            symbol = trade_info.get('symbol', 'N/A')
+            side = trade_info.get('side', 'N/A')
+            amount = trade_info.get('amount', 0)
+            price = trade_info.get('price', 0)
+            
+            # Рассчитываем прибыль/убыток
+            pnl = 0.0
+            if side == 'SELL':
+                estimated_usdt = trade_info.get('estimated_usdt', 0)
+                # Для продажи показываем полученную сумму в USDT
+                pnl = estimated_usdt
+            elif side == 'BUY':
+                # Для покупки показываем потраченную сумму со знаком минус
+                pnl = -amount
+            
+            # Создаем элементы таблицы
+            time_item = QTableWidgetItem(str(timestamp))
+            symbol_item = QTableWidgetItem(symbol)
+            side_item = QTableWidgetItem(side)
+            amount_item = QTableWidgetItem(f"{amount:.6f}")
+            price_item = QTableWidgetItem(f"${price:.6f}")
+            pnl_item = QTableWidgetItem(f"${pnl:.2f}")
+            
+            # Цветовое кодирование для стороны сделки
+            if side == 'BUY':
+                side_item.setBackground(QColor(46, 204, 113, 50))  # Зеленый для покупки
+                side_item.setForeground(QColor(39, 174, 96))
+            elif side == 'SELL':
+                side_item.setBackground(QColor(231, 76, 60, 50))   # Красный для продажи
+                side_item.setForeground(QColor(192, 57, 43))
+            
+            # Цветовое кодирование для P&L
+            if pnl > 0:
+                pnl_item.setForeground(QColor(39, 174, 96))  # Зеленый для прибыли
+            elif pnl < 0:
+                pnl_item.setForeground(QColor(192, 57, 43))  # Красный для убытка
+            
+            # Устанавливаем элементы в таблицу
+            self.history_table.setItem(row_count, 0, time_item)
+            self.history_table.setItem(row_count, 1, symbol_item)
+            self.history_table.setItem(row_count, 2, side_item)
+            self.history_table.setItem(row_count, 3, amount_item)
+            self.history_table.setItem(row_count, 4, price_item)
+            self.history_table.setItem(row_count, 5, pnl_item)
+            
+            # Прокручиваем к последней записи
+            self.history_table.scrollToBottom()
+            
+        except Exception as e:
+            self.add_log(f"❌ Ошибка добавления сделки в таблицу: {e}")
     
     def auto_start_trading(self):
         """Автоматический запуск торговли при старте программы"""

@@ -80,6 +80,21 @@ except ImportError:
     def setup_terminal_logging():
         pass
 
+try:
+    from src.utils.performance_monitor import get_performance_monitor, start_performance_monitoring, stop_performance_monitoring, measure_performance
+except ImportError:
+    # Заглушки если модуль не найден
+    def get_performance_monitor():
+        return None
+    def start_performance_monitoring():
+        pass
+    def stop_performance_monitoring():
+        pass
+    def measure_performance(operation_name=None):
+        def decorator(func):
+            return func
+        return decorator
+
 # Импорт наших модулей
 try:
     from api.bybit_client import BybitClient
@@ -118,7 +133,7 @@ class TradingWorker(QThread):
         self.api_secret = api_secret
         self.testnet = testnet
         self.running = False
-        self.trading_enabled = False  # ✅ ИСПРАВЛЕНО: торговля отключена по умолчанию, включается ТОЛЬКО через кнопку
+        self.trading_enabled = True  # ✅ ИСПРАВЛЕНО: торговля включена по умолчанию для автоматической работы
         self._mutex = QMutex()
         
         # Инициализация компонентов
@@ -126,6 +141,10 @@ class TradingWorker(QThread):
         self.ml_strategy = None
         self.db_manager = None
         self.config_manager = None
+        self.performance_monitor = get_performance_monitor()
+        
+        # Запуск мониторинга производительности
+        start_performance_monitoring()
         
         # Инициализация атрибутов для работы с балансом и историей сделок
         self.trade_history = []
@@ -381,6 +400,7 @@ class TradingWorker(QThread):
             #     'session_id': getattr(self, 'current_session_id', None)
             # }) # Временно закомментировано - блокирует выполнение
     
+    @measure_performance("update_balance")
     def _update_balance(self, session_id: str) -> Optional[dict]:
         """Обновление информации о балансе"""
         try:
@@ -448,6 +468,7 @@ class TradingWorker(QThread):
             self.logger.error(f"Ошибка обновления баланса: {e}")
             return None
     
+    @measure_performance("update_positions")
     def _update_positions(self, session_id: str) -> List[dict]:
         """Обновление информации о позициях (для спотовой торговли - открытые ордера)"""
         try:
@@ -547,9 +568,14 @@ class TradingWorker(QThread):
                 self.logger.warning("Не найдено символов для анализа. Проверьте подключение к программе просмотра тикеров.")
                 return
             
-            # Ограничиваем количество символов для анализа чтобы избежать перегрузки
-            max_symbols = 10  # Анализируем максимум 10 символов за цикл
-            symbols_to_analyze = symbols_to_analyze[:max_symbols]
+            # ОПТИМИЗАЦИЯ: Увеличиваем количество символов для анализа и добавляем интеллектуальный отбор
+            max_symbols = 100  # ОПТИМИЗИРОВАНО: Увеличено до 100 символов за цикл для максимального охвата рынка (~600 тикеров)
+            
+            # Интеллектуальный отбор символов на основе объема и волатильности
+            if len(symbols_to_analyze) > max_symbols:
+                symbols_to_analyze = self._select_best_symbols(symbols_to_analyze, max_symbols)
+            
+            self.logger.info(f"Отобрано {len(symbols_to_analyze)} символов для анализа из доступных")
             
             # Обрабатываем символы асинхронно
             self._process_symbols_async(symbols_to_analyze, session_id, cycle_start)
@@ -563,6 +589,16 @@ class TradingWorker(QThread):
         if not symbols:
             cycle_time = (time.time() - cycle_start) * 1000
             self.logger.info(f"Торговый цикл завершен за {cycle_time:.2f} мс")
+            
+            # Периодическое логирование производительности каждые 10 циклов
+            self.cycle_count = getattr(self, 'cycle_count', 0) + 1
+            if self.cycle_count % 10 == 0:
+                try:
+                    performance_summary = self.performance_monitor.get_performance_summary()
+                    self.logger.info(f"Отчет о производительности (цикл {self.cycle_count}): {performance_summary}")
+                except Exception as e:
+                    self.logger.warning(f"Не удалось получить отчет о производительности: {e}")
+            
             return
         
         # Берем первый символ из списка
@@ -748,6 +784,48 @@ class TradingWorker(QThread):
         self.logger.info(f"Будет анализироваться {len(final_symbols)} торговых символов")
         return final_symbols  # Возвращаем все доступные символы без ограничений
     
+    def _select_best_symbols(self, symbols: List[str], max_count: int) -> List[str]:
+        """Интеллектуальный отбор лучших символов на основе объема и активности"""
+        try:
+            # Получаем данные о тикерах для оценки активности
+            if hasattr(self, 'ticker_loader') and self.ticker_loader:
+                ticker_data = self.ticker_loader.get_all_tickers()
+                if ticker_data:
+                    # Создаем список символов с метриками
+                    symbol_metrics = []
+                    for symbol in symbols:
+                        if symbol in ticker_data:
+                            data = ticker_data[symbol]
+                            # Вычисляем метрику активности (объем * изменение цены)
+                            volume = float(data.get('volume', 0))
+                            price_change = abs(float(data.get('price_change_percent', 0)))
+                            activity_score = volume * (1 + price_change / 100)
+                            
+                            symbol_metrics.append({
+                                'symbol': symbol,
+                                'volume': volume,
+                                'price_change': price_change,
+                                'activity_score': activity_score
+                            })
+                    
+                    # Сортируем по активности (убывание)
+                    symbol_metrics.sort(key=lambda x: x['activity_score'], reverse=True)
+                    
+                    # Возвращаем топ символов
+                    selected_symbols = [item['symbol'] for item in symbol_metrics[:max_count]]
+                    
+                    self.logger.info(f"Отобрано {len(selected_symbols)} наиболее активных символов")
+                    return selected_symbols
+            
+            # Если данные о тикерах недоступны, возвращаем первые символы
+            self.logger.warning("Данные о тикерах недоступны, используем простой отбор")
+            return symbols[:max_count]
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка при отборе символов: {e}")
+            return symbols[:max_count]
+    
+    @measure_performance("analyze_symbol")
     def _analyze_symbol(self, symbol: str, session_id: str) -> Optional[dict]:
         """Анализ конкретного символа (асинхронно)"""
         try:
@@ -883,6 +961,7 @@ class TradingWorker(QThread):
             self.logger.error(f"Ошибка проверки лимитов: {e}")
             return False
     
+    @measure_performance("execute_trade")
     def _execute_trade(self, symbol: str, analysis: dict, session_id: str) -> Optional[dict]:
         """Выполнение торговой операции"""
         try:
@@ -1138,6 +1217,16 @@ class TradingWorker(QThread):
             # НЕ отключаем торговлю автоматически - пользователь должен управлять этим сам
             # self.trading_enabled = False  # УБРАНО: не отключаем торговлю при остановке потока
             self.logger.info("Остановка торгового потока запрошена")
+            
+            # Остановка мониторинга производительности
+            stop_performance_monitoring()
+            
+            # Вывод финального отчета о производительности
+            if self.performance_monitor:
+                summary = self.performance_monitor.get_performance_summary()
+                self.logger.info("=== ОТЧЕТ О ПРОИЗВОДИТЕЛЬНОСТИ ===")
+                for key, value in summary.items():
+                    self.logger.info(f"{key}: {value}")
             
             # Отправляем сигнал об остановке только если торговля была отключена
             if not self.trading_enabled:

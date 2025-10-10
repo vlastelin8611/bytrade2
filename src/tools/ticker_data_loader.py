@@ -40,6 +40,10 @@ class TickerDataLoader:
         self.tickers_data = {}
         self.historical_data = {}
         self.last_update_timestamp = None
+        
+        # Инициализируем путь для данных
+        self.data_path = Path(__file__).parent.parent.parent / 'data'
+        self.data_path.mkdir(exist_ok=True)
 
     def get_data_file_path(self) -> Path:
         """Возвращает путь к файлу с сохранёнными данными тикеров."""
