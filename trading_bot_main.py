@@ -70,7 +70,7 @@ if GUI_AVAILABLE:
         QProgressBar, QStatusBar, QTabWidget, QScrollArea, QFrame, 
         QGridLayout, QSpacerItem, QSizePolicy, QLineEdit, QComboBox, QSlider
     )
-    from PySide6.QtCore import QTimer, QThread, Signal, QMutex, QMetaObject, Q_ARG
+    from PySide6.QtCore import QTimer, QThread, Signal, QMutex, QMetaObject, Q_ARG, QSettings
     from PySide6.QtGui import QTextCursor, QFont, QPalette, QColor, QPixmap, QIcon
 
 # Импортируем модуль для записи логов терминала
@@ -3081,7 +3081,7 @@ class TradingBotMainWindow(QMainWindow):
         
         # Автопрокрутка к последнему сообщению
         cursor = self.logs_text.textCursor()
-        cursor.movePosition(QTextCursor.End)
+        cursor.movePosition(QTextCursor.MoveOperation.End)
         self.logs_text.setTextCursor(cursor)
     
     def handle_error(self, error_message: str):

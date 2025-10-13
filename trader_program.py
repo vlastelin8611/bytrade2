@@ -36,7 +36,7 @@ try:
         QPushButton, QLabel, QTextEdit, QGroupBox, QGridLayout,
         QProgressBar, QStatusBar, QFrame, QSplitter, QTableWidget,
         QTableWidgetItem, QHeaderView, QSpacerItem, QSizePolicy,
-        QTabWidget
+        QTabWidget, QLineEdit, QCheckBox
     )
     from PySide6.QtCore import QTimer, QThread, Signal, Qt, QMutex
     from PySide6.QtGui import QFont, QColor, QPalette, QTextCursor
@@ -53,6 +53,15 @@ try:
 except ImportError as e:
     print(f"❌ Ошибка импорта API: {e}")
     sys.exit(1)
+
+# Импорт Telegram уведомлений
+try:
+    from telegram_notifier import TelegramNotifier
+    TELEGRAM_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Telegram уведомления недоступны: {e}")
+    TelegramNotifier = None
+    TELEGRAM_AVAILABLE = False
 
 
 class TradingSignal:
@@ -377,7 +386,7 @@ class TradingEngine(QThread):
     log_message = Signal(str)
     status_changed = Signal(str)
     
-    def __init__(self, bybit_client, trading_enabled=True):  # Изменено с False на True
+    def __init__(self, bybit_client, trading_enabled=True, telegram_notifier=None):  # Добавлен параметр telegram_notifier
         super().__init__()
         self.bybit_client = bybit_client
         self.running = False
@@ -390,6 +399,18 @@ class TradingEngine(QThread):
         self.last_buy_times = {}  # Словарь для отслеживания времени последних покупок
         self.buy_cooldown = 60  # Уменьшаем кулдаун с 5 минут до 1 минуты для более активной торговли
         self.signals_file = Path("signals_queue.json")  # Файл для сохранения очереди сигналов
+        
+        # Новые параметры для контроля риска
+        self.max_open_positions = 10  # Максимальное количество одновременно открытых позиций
+        self.risk_per_trade = 0.005  # 0.5% от баланса на одну сделку (вместо 1%)
+        
+        # Используем переданный telegram_notifier или создаем новый
+        self.telegram_notifier = telegram_notifier
+        if self.telegram_notifier and hasattr(self.telegram_notifier, 'set_callback'):
+            # Настройка callback функций
+            self.telegram_notifier.set_callback('get_balance', self.get_balance_for_telegram)
+            self.telegram_notifier.set_callback('stop_trading', self.stop_trading_for_telegram)
+        
         self.load_signals_queue()  # Загружаем сохраненную очередь при инициализации
         
     def run(self):
@@ -517,21 +538,31 @@ class TradingEngine(QThread):
                 if isinstance(instrument, dict):
                     lot_size_filter = instrument.get('lotSizeFilter', {})
                     
-                    # Извлекаем минимальные значения
+                    # Извлекаем минимальные и максимальные значения
                     min_order_qty = float(lot_size_filter.get('minOrderQty', 0))
                     min_order_amt = float(lot_size_filter.get('minOrderAmt', 5))  # По умолчанию 5 USDT
+                    max_order_qty = float(lot_size_filter.get('maxOrderQty', 0))  # Максимальное количество
+                    max_market_order_qty = float(lot_size_filter.get('maxMarketOrderQty', 0))  # Максимальное количество для рыночных ордеров
                     qty_step = float(lot_size_filter.get('qtyStep', lot_size_filter.get('minOrderQty', 0.00001)))
                     
                     # Если qtyStep равен 0, используем minOrderQty как шаг
                     if qty_step == 0:
                         qty_step = min_order_qty if min_order_qty > 0 else 0.00001
                     
-                    self.log_message.emit(f"📊 {symbol}: minOrderQty={min_order_qty}, minOrderAmt={min_order_amt}, qtyStep={qty_step}")
+                    # Используем maxMarketOrderQty для рыночных ордеров, если оно меньше maxOrderQty
+                    # Это решает проблему с нереалистично большими значениями maxOrderQty
+                    effective_max_qty = max_order_qty
+                    if max_market_order_qty > 0 and (max_order_qty == 0 or max_market_order_qty < max_order_qty):
+                        effective_max_qty = max_market_order_qty
+                        self.log_message.emit(f"📊 {symbol}: Используем maxMarketOrderQty={max_market_order_qty} вместо maxOrderQty={max_order_qty}")
+                    
+                    self.log_message.emit(f"📊 {symbol}: minOrderQty={min_order_qty}, minOrderAmt={min_order_amt}, maxOrderQty={max_order_qty}, maxMarketOrderQty={max_market_order_qty}, effectiveMaxQty={effective_max_qty}, qtyStep={qty_step}")
                     
                     return {
                         'symbol': symbol,
                         'minOrderQty': min_order_qty,
                         'minOrderAmt': min_order_amt,
+                        'maxOrderQty': effective_max_qty,  # Используем эффективное максимальное количество
                         'qtyStep': qty_step,
                         'basePrecision': lot_size_filter.get('basePrecision', '0.00001'),
                         'quotePrecision': lot_size_filter.get('quotePrecision', '0.0000001')
@@ -555,17 +586,27 @@ class TradingEngine(QThread):
                         if isinstance(instrument, dict):
                             lot_size_filter = instrument.get('lotSizeFilter', {})
                             
-                            # Извлекаем минимальные значения
+                            # Извлекаем минимальные и максимальные значения
                             min_order_qty = float(lot_size_filter.get('minOrderQty', 0))
                             min_order_amt = float(lot_size_filter.get('minOrderAmt', 5))  # По умолчанию 5 USDT
+                            max_order_qty = float(lot_size_filter.get('maxOrderQty', 0))  # Максимальное количество
+                            max_market_order_qty = float(lot_size_filter.get('maxMarketOrderQty', 0))  # Максимальное количество для рыночных ордеров
                             qty_step = float(lot_size_filter.get('qtyStep', 0.0))
                             
-                            self.log_message.emit(f"📊 {symbol}: minOrderQty={min_order_qty}, minOrderAmt={min_order_amt}, qtyStep={qty_step}")
+                            # Используем maxMarketOrderQty для рыночных ордеров, если оно меньше maxOrderQty
+                            # Это решает проблему с нереалистично большими значениями maxOrderQty
+                            effective_max_qty = max_order_qty
+                            if max_market_order_qty > 0 and (max_order_qty == 0 or max_market_order_qty < max_order_qty):
+                                effective_max_qty = max_market_order_qty
+                                self.log_message.emit(f"📊 {symbol}: Используем maxMarketOrderQty={max_market_order_qty} вместо maxOrderQty={max_order_qty}")
+                            
+                            self.log_message.emit(f"📊 {symbol}: minOrderQty={min_order_qty}, minOrderAmt={min_order_amt}, maxOrderQty={max_order_qty}, maxMarketOrderQty={max_market_order_qty}, effectiveMaxQty={effective_max_qty}, qtyStep={qty_step}")
                             
                             return {
                                 'symbol': symbol,
                                 'minOrderQty': min_order_qty,
                                 'minOrderAmt': min_order_amt,
+                                'maxOrderQty': effective_max_qty,  # Используем эффективное максимальное количество
                                 'qtyStep': qty_step,
                                 'basePrecision': lot_size_filter.get('basePrecision', '0.00001'),
                                 'quotePrecision': lot_size_filter.get('quotePrecision', '0.0000001')
@@ -592,11 +633,16 @@ class TradingEngine(QThread):
         }
     
     def add_signals(self, signals: List[TradingSignal]):
-        """Добавление сигналов в очередь с проверкой кулдауна"""
+        """Добавление сигналов в очередь с проверкой кулдауна и фильтрацией по доступности баланса"""
         self.mutex.lock()
         try:
             filtered_signals = []
             current_time = time.time()
+            usdt_balance = self.portfolio.get('USDT', 0)
+            
+            # Проверяем количество открытых позиций
+            open_positions = len([coin for coin, amount in self.portfolio.items() 
+                                if coin != 'USDT' and amount > 0])
             
             for signal in signals:
                 # Проверяем кулдаун только для сигналов на покупку
@@ -607,6 +653,25 @@ class TradingEngine(QThread):
                         self.log_message.emit(f"⏳ Кулдаун для {signal.symbol}: осталось {remaining_time:.0f} сек (сигнал отклонен)")
                         continue
                 
+                # Фильтрация сигналов на покупку по доступности баланса
+                if signal.signal == 'BUY':
+                    # Проверяем максимальное количество позиций
+                    if open_positions >= self.max_open_positions:
+                        self.log_message.emit(f"⚠️ Достигнуто максимальное количество позиций ({self.max_open_positions}). Сигнал {signal.symbol} отклонен")
+                        continue
+                    
+                    # Проверяем минимальную сумму для покупки
+                    try:
+                        instrument_info = self.get_instrument_info(signal.symbol)
+                        min_trade_amount = max(float(instrument_info['minOrderAmt']), 5.0)  # API минимум $5
+                        
+                        if usdt_balance < min_trade_amount:
+                            self.log_message.emit(f"⚠️ Недостаточно USDT для {signal.symbol}: ${usdt_balance:.2f} < ${min_trade_amount:.2f} (сигнал отклонен)")
+                            continue
+                    except Exception as e:
+                        self.log_message.emit(f"⚠️ Ошибка проверки инструмента {signal.symbol}: {e} (сигнал отклонен)")
+                        continue
+                
                 filtered_signals.append(signal)
             
             self.signals_queue.extend(filtered_signals)
@@ -615,7 +680,7 @@ class TradingEngine(QThread):
                 self.save_signals_queue()  # Сохраняем изменения в файл
             if len(filtered_signals) < len(signals):
                 rejected_count = len(signals) - len(filtered_signals)
-                self.log_message.emit(f"🚫 Отклонено {rejected_count} сигналов из-за кулдауна")
+                self.log_message.emit(f"🚫 Отклонено {rejected_count} сигналов из-за ограничений")
         finally:
             self.mutex.unlock()
     
@@ -689,8 +754,16 @@ class TradingEngine(QThread):
                 
                 # Обновляем портфолио только если получили валидные данные
                 if temp_portfolio:
+                    # Сохраняем предыдущий баланс USDT для сравнения
+                    old_usdt_balance = self.portfolio.get('USDT', 0)
+                    
                     self.portfolio = temp_portfolio
                     self.log_message.emit(f"✅ Портфолио успешно обновлено новыми данными")
+                    
+                    # Отправляем Telegram уведомление об изменении баланса
+                    new_usdt_balance = self.portfolio.get('USDT', 0)
+                    if self.telegram_notifier and abs(new_usdt_balance - old_usdt_balance) > 0.01:
+                        self.telegram_notifier.notify_balance_change(old_usdt_balance, new_usdt_balance)
                 else:
                     self.log_message.emit("⚠️ Не получено валидных данных о балансе, сохраняем текущий портфолио")
                 
@@ -817,9 +890,71 @@ class TradingEngine(QThread):
             self.log_message.emit(f"❌ Ошибка обработки сигнала {signal.symbol}: {e}")
             self.save_signals_queue()  # Сохраняем изменения в файл
     
+    def format_quantity_for_api(self, qty: float, qty_step: float) -> str:
+        """
+        Форматирует количество для API без использования научной нотации
+        
+        Args:
+            qty: Количество для форматирования
+            qty_step: Шаг количества для определения точности
+            
+        Returns:
+            str: Отформатированное количество как строка
+        """
+        if qty == 0:
+            return "0"
+        
+        from decimal import Decimal, ROUND_DOWN
+        
+        # Преобразуем в Decimal для точных вычислений
+        decimal_qty = Decimal(str(qty))
+        decimal_step = Decimal(str(qty_step))
+        
+        # Округляем количество до ближайшего кратного qty_step (вниз)
+        rounded_qty = (decimal_qty // decimal_step) * decimal_step
+        
+        # Определяем количество десятичных знаков на основе qty_step
+        if decimal_step >= 1:
+            # Если шаг >= 1, используем целые числа
+            return str(int(rounded_qty))
+        else:
+            # Получаем строковое представление step без экспоненциальной записи
+            step_str = format(decimal_step, 'f')
+            
+            # Убираем лишние нули справа
+            step_str = step_str.rstrip('0').rstrip('.')
+            
+            # Определяем количество знаков после запятой
+            if '.' in step_str:
+                precision_decimals = len(step_str.split('.')[1])
+            else:
+                precision_decimals = 0
+            
+            # Ограничиваем максимальную точность разумным пределом
+            precision_decimals = min(precision_decimals, 8)
+            
+            # Форматируем с нужной точностью, избегая научной нотации
+            formatted = f"{rounded_qty:.{precision_decimals}f}"
+            
+            # Убираем лишние нули справа, но оставляем минимум нужных знаков
+            if '.' in formatted:
+                formatted = formatted.rstrip('0').rstrip('.')
+                # Если убрали все знаки после точки, добавляем минимум нужных
+                if '.' not in formatted and precision_decimals > 0:
+                    formatted += '.' + '0' * min(precision_decimals, 1)
+            
+            return formatted
+    
     def execute_buy_order(self, signal: TradingSignal):
         """Выполнение ордера на покупку"""
         try:
+            # Проверяем количество открытых позиций
+            open_positions = len([coin for coin, amount in self.portfolio.items() 
+                                if coin != 'USDT' and amount > 0])
+            if open_positions >= self.max_open_positions:
+                self.log_message.emit(f"⚠️ Достигнуто максимальное количество открытых позиций ({self.max_open_positions}). Пропускаем покупку {signal.symbol}")
+                return False
+            
             # Проверяем кулдаун для данного символа
             current_time = time.time()
             if signal.symbol in self.last_buy_times:
@@ -827,7 +962,7 @@ class TradingEngine(QThread):
                 if time_since_last_buy < self.buy_cooldown:
                     remaining_time = self.buy_cooldown - time_since_last_buy
                     self.log_message.emit(f"⏳ Кулдаун для {signal.symbol}: осталось {remaining_time:.0f} сек")
-                    return
+                    return False
             
             # Проверяем баланс USDT
             usdt_balance = self.portfolio.get('USDT', 0)
@@ -840,47 +975,105 @@ class TradingEngine(QThread):
             # Но для BTCUSDT minOrderAmt уже равен 5 USDT согласно API ответу
             api_min_order_value = 5.0  # $5 минимум для API торговли
             
+            # Добавляем буфер к минимальной сумме для избежания ошибок округления
+            # Проблема: $5.28 отклоняется при минимуме $5.00 из-за округления
+            buffer_multiplier = 1.10  # 10% буфер для надежного избежания ошибок округления
+            
             # Устанавливаем эффективную минимальную сумму на основе реальных данных API
             if signal.symbol == 'BTCUSDT':
-                # Для BTCUSDT используем minOrderAmt из API (5 USDT)
-                effective_min_amount = max(min_trade_amount, api_min_order_value)
+                # Для BTCUSDT используем minOrderAmt из API (5 USDT) с буфером
+                base_min_amount = max(min_trade_amount, api_min_order_value)
+                effective_min_amount = base_min_amount * buffer_multiplier
                 max_trade_amount = max(effective_min_amount * 20, 100.0)  # До $100 для BTCUSDT
             elif signal.symbol in ['ETHUSDT', 'BNBUSDT', 'LINKUSDT']:
-                # Для других дорогих активов используем более высокий минимум
-                effective_min_amount = max(min_trade_amount, api_min_order_value, 50.0)
+                # Для других дорогих активов используем более высокий минимум с буфером
+                base_min_amount = max(min_trade_amount, api_min_order_value, 50.0)
+                effective_min_amount = base_min_amount * buffer_multiplier
                 max_trade_amount = max(effective_min_amount * 4, 200.0)
             else:
-                # Для всех остальных символов используем API минимум $5
-                effective_min_amount = max(min_trade_amount, api_min_order_value)
+                # Для всех остальных символов используем API минимум $5 с буфером
+                base_min_amount = max(min_trade_amount, api_min_order_value)
+                effective_min_amount = base_min_amount * buffer_multiplier
                 max_trade_amount = max(effective_min_amount * 10, 50.0)  # Минимум $50 для надежности
             
             if usdt_balance < effective_min_amount:
                 self.log_message.emit(f"⚠️ Недостаточно USDT для покупки {signal.symbol}: ${usdt_balance:.2f} (минимум ${effective_min_amount})")
                 return False
             
-            # Рассчитываем сумму для покупки (1% от USDT, но не менее минимума и не более максимума)
-            trade_amount = max(min(usdt_balance * 0.01, max_trade_amount), effective_min_amount)
+            # Рассчитываем сумму для покупки (0.5% от USDT вместо 1%, но не менее минимума и не более максимума)
+            trade_amount = max(min(usdt_balance * self.risk_per_trade, max_trade_amount), effective_min_amount)
             
             # Рассчитываем количество для покупки
             qty = trade_amount / signal.price
             
             # Получаем параметры из API
             min_order_qty = instrument_info['minOrderQty']
+            max_order_qty = instrument_info['maxOrderQty']  # Эффективное максимальное количество (уже учитывает maxMarketOrderQty)
             qty_step = instrument_info['qtyStep']
             
             # Правильно округляем количество согласно qtyStep
             if qty_step > 0:
                 import math
+                from decimal import Decimal
+                
+                # Правильно определяем количество десятичных знаков в qty_step
+                # включая научную нотацию (например, 1e-05)
+                decimal_step = Decimal(str(qty_step))
+                step_str = format(decimal_step, 'f')
+                step_str = step_str.rstrip('0').rstrip('.')
+                
+                if '.' in step_str:
+                    precision_decimals = len(step_str.split('.')[1])
+                else:
+                    precision_decimals = 0
+                
+                # Округляем с правильной точностью
                 qty = math.floor(qty / qty_step) * qty_step
+                qty = round(qty, precision_decimals)
+            
+            # Дополнительная проверка для токенов с очень низкой ценой
+            # Ограничиваем количество разумным пределом для предотвращения чрезмерно больших ордеров
+            reasonable_max_qty = 1e12  # 1 триллион токенов - разумный предел
+            if qty > reasonable_max_qty:
+                self.log_message.emit(f"⚠️ Количество {qty:.0f} превышает разумный предел {reasonable_max_qty:.0f} для {signal.symbol}")
+                qty = reasonable_max_qty
+                self.log_message.emit(f"⚠️ Количество ограничено разумным пределом: {qty:.0f}")
+            
+            # Проверяем максимальное количество от API (после применения разумного предела)
+            if max_order_qty > 0 and qty > max_order_qty:
+                self.log_message.emit(f"⚠️ Количество превышает максимальное для {signal.symbol}: {qty:.8f} > {max_order_qty:.8f}")
+                qty = max_order_qty
+                self.log_message.emit(f"⚠️ Количество скорректировано до максимального: {qty:.8f}")
             
             # Проверяем, что количество не меньше минимального
             if qty < min_order_qty:
                 # Увеличиваем количество до минимального, округленного по qtyStep
                 if qty_step > 0:
+                    import math
+                    from decimal import Decimal
+                    
+                    # Правильно определяем количество десятичных знаков в qty_step
+                    # включая научную нотацию (например, 1e-05)
+                    decimal_step = Decimal(str(qty_step))
+                    step_str = format(decimal_step, 'f')
+                    step_str = step_str.rstrip('0').rstrip('.')
+                    
+                    if '.' in step_str:
+                        precision_decimals = len(step_str.split('.')[1])
+                    else:
+                        precision_decimals = 0
+                    
+                    # Округляем с правильной точностью
                     qty = math.ceil(min_order_qty / qty_step) * qty_step
+                    qty = round(qty, precision_decimals)
                 else:
                     qty = min_order_qty
                 self.log_message.emit(f"⚠️ Количество увеличено до минимального: {qty:.8f}")
+                
+                # Повторно проверяем максимальное количество после корректировки
+                if max_order_qty > 0 and qty > max_order_qty:
+                    self.log_message.emit(f"❌ Невозможно выполнить ордер для {signal.symbol}: минимальное количество {min_order_qty:.8f} превышает максимальное {max_order_qty:.8f}")
+                    return False
             
             # Пересчитываем сумму сделки после корректировки количества
             trade_usdt = qty * signal.price
@@ -893,35 +1086,102 @@ class TradingEngine(QThread):
                 # Увеличиваем количество для достижения минимальной стоимости
                 qty_needed = effective_min_check / signal.price
                 if qty_step > 0:
+                    import math
+                    import decimal
+                    
+                    # Определяем количество десятичных знаков в qty_step
+                    qty_step_str = f"{qty_step:.10f}".rstrip('0').rstrip('.')
+                    if '.' in qty_step_str:
+                        precision_decimals = len(qty_step_str.split('.')[1])
+                    else:
+                        precision_decimals = 0
+                    
+                    # Округляем с правильной точностью
                     qty = math.ceil(qty_needed / qty_step) * qty_step
+                    qty = round(qty, precision_decimals)
                 else:
                     qty = qty_needed
                 trade_usdt = qty * signal.price
                 self.log_message.emit(f"⚠️ Количество скорректировано для эффективного минимума: {qty:.8f}")
+                
+                # Повторная проверка разумного предела после корректировки
+                if qty > reasonable_max_qty:
+                    self.log_message.emit(f"⚠️ После корректировки количество {qty:.0f} превышает разумный предел {reasonable_max_qty:.0f} для {signal.symbol}")
+                    qty = reasonable_max_qty
+                    trade_usdt = qty * signal.price
+                    self.log_message.emit(f"⚠️ Количество ограничено разумным пределом: {qty:.0f}, итоговая сумма: ${trade_usdt:.2f}")
             
             # Финальная проверка баланса
             if trade_usdt > usdt_balance:
-                self.log_message.emit(f"⚠️ Недостаточно USDT: требуется ${trade_usdt:.2f}, доступно ${usdt_balance:.2f}")
-                return False
+                # Корректируем количество под доступный баланс
+                max_affordable_qty = usdt_balance / signal.price
+                
+                # Округляем вниз согласно qtyStep
+                if qty_step > 0:
+                    import math
+                    import decimal
+                    
+                    # Определяем количество десятичных знаков в qty_step
+                    qty_step_str = f"{qty_step:.10f}".rstrip('0').rstrip('.')
+                    if '.' in qty_step_str:
+                        precision_decimals = len(qty_step_str.split('.')[1])
+                    else:
+                        precision_decimals = 0
+                    
+                    # Округляем вниз с правильной точностью
+                    max_affordable_qty = math.floor(max_affordable_qty / qty_step) * qty_step
+                    max_affordable_qty = round(max_affordable_qty, precision_decimals)
+                
+                # Проверяем, что скорректированное количество не меньше минимального
+                if max_affordable_qty < min_order_qty:
+                    self.log_message.emit(f"⚠️ Недостаточно USDT: требуется ${trade_usdt:.2f}, доступно ${usdt_balance:.2f}. Даже минимальное количество {min_order_qty:.8f} требует ${min_order_qty * signal.price:.2f}")
+                    return False
+                
+                # Обновляем количество и сумму
+                qty = max_affordable_qty
+                trade_usdt = qty * signal.price
+                self.log_message.emit(f"⚠️ Количество скорректировано под доступный баланс: {qty:.8f} (${trade_usdt:.2f})")
+                
+                # Проверяем, что скорректированная сумма не меньше эффективного минимума
+                if trade_usdt < effective_min_amount:
+                    self.log_message.emit(f"⚠️ После корректировки под баланс сумма ${trade_usdt:.2f} меньше минимальной ${effective_min_amount:.2f}")
+                    return False
             
             self.log_message.emit(f"💰 ПОКУПКА {signal.symbol}: ${trade_usdt:.2f} USDT ({qty:.6f} {signal.symbol.replace('USDT', '')})")
             self.log_message.emit(f"   Цена: ${signal.price:.6f}, Итоговая стоимость: ${trade_usdt:.2f}, Эффективный минимум: ${effective_min_amount:.2f}")
             self.log_message.emit(f"   Причина: {signal.reason}")
             
             # Выполняем реальный ордер
+            formatted_qty = self.format_quantity_for_api(qty, qty_step)
+            self.log_message.emit(f"🔢 Отправляем количество в API: {formatted_qty} (исходное: {qty})")
+            
             order_result = self.bybit_client.place_order(
                 category='spot',
                 symbol=signal.symbol,
                 side='Buy',
                 order_type='Market',
-                qty=str(qty)
+                qty=formatted_qty
             )
             
-            if order_result and order_result.get('retCode') == 0:
-                self.log_message.emit(f"✅ Ордер на покупку {signal.symbol} успешно размещен")
+            # Проверяем успешность ордера по retCode и наличию orderId
+            if (order_result and 
+                order_result.get('retCode') == 0 and 
+                order_result.get('result', {}).get('orderId')):
+                
+                order_id = order_result.get('result', {}).get('orderId')
+                self.log_message.emit(f"✅ Ордер на покупку {signal.symbol} успешно размещен (ID: {order_id})")
                 
                 # Обновляем время последней покупки для данного символа
                 self.last_buy_times[signal.symbol] = current_time
+                
+                # Немедленно обновляем портфолио после успешной покупки
+                self.update_portfolio()
+                
+                # Отправляем Telegram уведомление о покупке
+                if self.telegram_notifier:
+                    self.telegram_notifier.notify_trade_executed(
+                        'BUY', signal.symbol, qty, signal.price, trade_usdt
+                    )
                 
                 # Эмитируем событие выполненной сделки
                 trade_info = {
@@ -940,10 +1200,16 @@ class TradingEngine(QThread):
             else:
                 error_msg = order_result.get('retMsg', 'Неизвестная ошибка') if order_result else 'Нет ответа от API'
                 self.log_message.emit(f"❌ Ошибка размещения ордера на покупку {signal.symbol}: {error_msg}")
+                # Telegram notification for buy order error
+                if self.telegram_notifier:
+                    self.telegram_notifier.notify_error(f"Ошибка покупки {signal.symbol}: {error_msg}")
                 return False
             
         except Exception as e:
             self.log_message.emit(f"❌ Ошибка выполнения покупки {signal.symbol}: {e}")
+            # Telegram notification for buy order exception
+            if self.telegram_notifier:
+                self.telegram_notifier.notify_error(f"Ошибка выполнения покупки {signal.symbol}: {e}")
             return False
     
     def execute_sell_order(self, signal: TradingSignal):
@@ -967,7 +1233,22 @@ class TradingEngine(QThread):
             # Правильно округляем количество согласно qtyStep
             if qty_step > 0:
                 import math
+                from decimal import Decimal
+                
+                # Правильно определяем количество десятичных знаков в qty_step
+                # включая научную нотацию (например, 1e-05)
+                decimal_step = Decimal(str(qty_step))
+                step_str = format(decimal_step, 'f')
+                step_str = step_str.rstrip('0').rstrip('.')
+                
+                if '.' in step_str:
+                    precision_decimals = len(step_str.split('.')[1])
+                else:
+                    precision_decimals = 0
+                
+                # Округляем с правильной точностью
                 sell_amount = math.floor(sell_amount / qty_step) * qty_step
+                sell_amount = round(sell_amount, precision_decimals)
             
             # Проверяем, что количество не меньше минимального
             if sell_amount < min_order_qty:
@@ -986,16 +1267,33 @@ class TradingEngine(QThread):
             self.log_message.emit(f"   Цена: ${signal.price:.6f}, Причина: {signal.reason}")
             
             # Выполняем реальный ордер
+            formatted_qty = self.format_quantity_for_api(sell_amount, qty_step)
+            self.log_message.emit(f"🔢 Отправляем количество в API: {formatted_qty} (исходное: {sell_amount})")
+            
             order_result = self.bybit_client.place_order(
                 category='spot',
                 symbol=signal.symbol,
                 side='Sell',
                 order_type='Market',
-                qty=str(sell_amount)
+                qty=formatted_qty
             )
             
-            if order_result and order_result.get('retCode') == 0:
-                self.log_message.emit(f"✅ Ордер на продажу {signal.symbol} успешно размещен")
+            # Проверяем успешность ордера по retCode и наличию orderId
+            if (order_result and 
+                order_result.get('retCode') == 0 and 
+                order_result.get('result', {}).get('orderId')):
+                
+                order_id = order_result.get('result', {}).get('orderId')
+                self.log_message.emit(f"✅ Ордер на продажу {signal.symbol} успешно размещен (ID: {order_id})")
+                
+                # Немедленно обновляем портфолио после успешной продажи
+                self.update_portfolio()
+                
+                # Отправляем Telegram уведомление о продаже
+                if self.telegram_notifier:
+                    self.telegram_notifier.notify_trade_executed(
+                        'SELL', signal.symbol, sell_amount, signal.price, estimated_usdt
+                    )
                 
                 # Эмитируем событие выполненной сделки
                 trade_info = {
@@ -1014,15 +1312,44 @@ class TradingEngine(QThread):
             else:
                 error_msg = order_result.get('retMsg', 'Неизвестная ошибка') if order_result else 'Нет ответа от API'
                 self.log_message.emit(f"❌ Ошибка размещения ордера на продажу {signal.symbol}: {error_msg}")
+                # Telegram notification for sell order error
+                if self.telegram_notifier:
+                    self.telegram_notifier.notify_error(f"Ошибка продажи {signal.symbol}: {error_msg}")
                 return False
             
         except Exception as e:
             self.log_message.emit(f"❌ Ошибка выполнения продажи {signal.symbol}: {e}")
+            # Telegram notification for sell order exception
+            if self.telegram_notifier:
+                self.telegram_notifier.notify_error(f"Ошибка выполнения продажи {signal.symbol}: {e}")
             return False
     
     def stop(self):
         """Остановка торгового движка"""
         self.running = False
+    
+    def get_balance_for_telegram(self):
+        """Получение баланса для Telegram уведомлений"""
+        try:
+            if hasattr(self, 'portfolio') and self.portfolio:
+                balance_text = "💰 <b>Текущий баланс:</b>\n\n"
+                for coin, amount in self.portfolio.items():
+                    if amount > 0:
+                        balance_text += f"• {coin}: {amount:.6f}\n"
+                return balance_text
+            else:
+                return "❌ Данные о балансе недоступны"
+        except Exception as e:
+            return f"❌ Ошибка получения баланса: {e}"
+    
+    def stop_trading_for_telegram(self):
+        """Остановка торговли через Telegram"""
+        try:
+            self.trading_enabled = False
+            self.stop()
+            return "⏹️ Торговля остановлена через Telegram"
+        except Exception as e:
+            return f"❌ Ошибка остановки торговли: {e}"
 
 
 class TraderMainWindow(QMainWindow):
@@ -1041,12 +1368,16 @@ class TraderMainWindow(QMainWindow):
         self.bybit_client = None
         self.data_collector = None
         self.trading_engine = None
+        self.telegram_notifier = None  # Инициализируем telegram_notifier
         
         # Настройка логирования
         self.setup_logging()
         
         # Настройка интерфейса (сначала создаем UI элементы)
         self.setup_ui()
+        
+        # Загружаем настройки Telegram перед инициализацией потоков
+        self.load_telegram_settings_early()
         
         # Инициализация API клиента (после создания UI)
         self.init_api_client()
@@ -1085,7 +1416,7 @@ class TraderMainWindow(QMainWindow):
         
         # Торговый движок
         if self.bybit_client:
-            self.trading_engine = TradingEngine(self.bybit_client, self.enable_trading_on_start)
+            self.trading_engine = TradingEngine(self.bybit_client, self.enable_trading_on_start, self.telegram_notifier)
         else:
             self.trading_engine = None
     
@@ -1111,6 +1442,10 @@ class TraderMainWindow(QMainWindow):
         # Вкладка "История сделок"
         history_tab = self.create_history_tab()
         self.tab_widget.addTab(history_tab, "📈 История сделок")
+        
+        # Вкладка "Telegram"
+        telegram_tab = self.create_telegram_tab()
+        self.tab_widget.addTab(telegram_tab, "📱 Telegram")
         
         main_layout.addWidget(self.tab_widget)
         
@@ -1174,9 +1509,11 @@ class TraderMainWindow(QMainWindow):
                 gridline-color: #bdc3c7;
                 background-color: white;
                 alternate-background-color: #f8f9fa;
+                color: #2c3e50;
             }
             QTableWidget::item {
                 padding: 8px;
+                color: #2c3e50;
             }
             QHeaderView::section {
                 background-color: #34495e;
@@ -1372,6 +1709,10 @@ class TraderMainWindow(QMainWindow):
         if self.trading_engine:
             self.trading_engine.trading_enabled = True
             self.add_log("✅ Торговля включена в движке")
+            
+            # Отправляем Telegram уведомление о запуске торговли
+            if self.trading_engine.telegram_notifier:
+                self.trading_engine.telegram_notifier.notify_trading_status(True)
         
         # Запускаем сбор данных
         if not self.data_collector.isRunning():
@@ -1394,6 +1735,10 @@ class TraderMainWindow(QMainWindow):
         if self.trading_engine:
             # self.trading_engine.trading_enabled = False  # УБРАНО: не отключаем торговлю при остановке потока
             self.add_log("⏹️ Поток остановлен, торговля остается активной")
+            
+            # Отправляем Telegram уведомление об остановке торговли
+            if self.trading_engine.telegram_notifier:
+                self.trading_engine.telegram_notifier.notify_trading_status(False)
         
         # Останавливаем потоки
         if self.data_collector.isRunning():
@@ -1623,6 +1968,170 @@ class TraderMainWindow(QMainWindow):
             
         except Exception as e:
             self.add_log(f"❌ Ошибка добавления сделки в таблицу: {e}")
+    
+    def create_telegram_tab(self) -> QWidget:
+        """Создание вкладки Telegram уведомлений"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Заголовок
+        title = QLabel("📱 Настройки Telegram уведомлений")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #2c3e50; margin: 10px;")
+        layout.addWidget(title)
+        
+        # Группа настроек
+        settings_group = QGroupBox("🔧 Конфигурация бота")
+        settings_layout = QVBoxLayout(settings_group)
+        
+        # Bot Token
+        token_layout = QHBoxLayout()
+        token_layout.addWidget(QLabel("Bot Token:"))
+        self.telegram_token_input = QLineEdit()
+        self.telegram_token_input.setPlaceholderText("Введите токен Telegram бота")
+        self.telegram_token_input.setEchoMode(QLineEdit.Password)
+        token_layout.addWidget(self.telegram_token_input)
+        settings_layout.addLayout(token_layout)
+        
+        # Chat ID
+        chat_layout = QHBoxLayout()
+        chat_layout.addWidget(QLabel("Chat ID:"))
+        self.telegram_chat_input = QLineEdit()
+        self.telegram_chat_input.setPlaceholderText("Введите Chat ID")
+        chat_layout.addWidget(self.telegram_chat_input)
+        settings_layout.addLayout(chat_layout)
+        
+        # Включение уведомлений
+        self.telegram_enabled_checkbox = QCheckBox("Включить Telegram уведомления")
+        settings_layout.addWidget(self.telegram_enabled_checkbox)
+        
+        # Кнопки управления
+        buttons_layout = QHBoxLayout()
+        
+        test_button = QPushButton("🧪 Тест уведомления")
+        test_button.clicked.connect(self.test_telegram_notification)
+        buttons_layout.addWidget(test_button)
+        
+        save_button = QPushButton("💾 Сохранить настройки")
+        save_button.clicked.connect(self.save_telegram_settings)
+        buttons_layout.addWidget(save_button)
+        
+        settings_layout.addLayout(buttons_layout)
+        layout.addWidget(settings_group)
+        
+        # Группа статистики
+        stats_group = QGroupBox("📊 Статистика уведомлений")
+        stats_layout = QVBoxLayout(stats_group)
+        
+        self.telegram_stats_label = QLabel("Отправлено уведомлений: 0\nОшибок: 0")
+        stats_layout.addWidget(self.telegram_stats_label)
+        
+        layout.addWidget(stats_group)
+        
+        # Растягиваем пространство
+        layout.addStretch()
+        
+        # Загружаем сохраненные настройки
+        self.load_telegram_settings()
+        
+        return widget
+    
+    def test_telegram_notification(self):
+        """Тестирование Telegram уведомления"""
+        try:
+            if not self.telegram_notifier:
+                self.add_log("❌ Telegram уведомления не настроены")
+                return
+            
+            self.telegram_notifier.send_test_message()
+            self.add_log("✅ Тестовое уведомление отправлено")
+        except Exception as e:
+            self.add_log(f"❌ Ошибка отправки тестового уведомления: {e}")
+    
+    def save_telegram_settings(self):
+        """Сохранение настроек Telegram"""
+        try:
+            settings = {
+                'token': self.telegram_token_input.text(),
+                'chat_id': self.telegram_chat_input.text(),
+                'enabled': self.telegram_enabled_checkbox.isChecked()
+            }
+            
+            # Сохраняем в файл
+            import json
+            with open('telegram_settings.json', 'w') as f:
+                json.dump(settings, f)
+            
+            # Инициализируем уведомления если включены
+            if settings['enabled'] and settings['token'] and settings['chat_id']:
+                self.init_telegram_notifier(settings['token'], settings['chat_id'])
+            
+            self.add_log("✅ Настройки Telegram сохранены")
+        except Exception as e:
+            self.add_log(f"❌ Ошибка сохранения настроек Telegram: {e}")
+    
+    def load_telegram_settings_early(self):
+        """Ранняя загрузка настроек Telegram перед созданием торгового движка"""
+        try:
+            import json
+            with open('telegram_settings.json', 'r') as f:
+                settings = json.load(f)
+            
+            # Инициализируем уведомления если включены
+            if settings.get('enabled') and settings.get('token') and settings.get('chat_id'):
+                from telegram_notifier import TelegramNotifier
+                self.telegram_notifier = TelegramNotifier(settings['token'], settings['chat_id'])
+                self.add_log("✅ Telegram уведомления инициализированы заранее")
+                
+        except FileNotFoundError:
+            # Файл настроек не найден - это нормально при первом запуске
+            pass
+        except Exception as e:
+            self.add_log(f"❌ Ошибка ранней загрузки настроек Telegram: {e}")
+    
+    def load_telegram_settings(self):
+        """Загрузка настроек Telegram"""
+        try:
+            import json
+            with open('telegram_settings.json', 'r') as f:
+                settings = json.load(f)
+            
+            self.telegram_token_input.setText(settings.get('token', ''))
+            self.telegram_chat_input.setText(settings.get('chat_id', ''))
+            self.telegram_enabled_checkbox.setChecked(settings.get('enabled', False))
+            
+            # Инициализируем уведомления если включены
+            if settings.get('enabled') and settings.get('token') and settings.get('chat_id'):
+                self.init_telegram_notifier(settings['token'], settings['chat_id'])
+                
+        except FileNotFoundError:
+            # Файл настроек не найден - это нормально при первом запуске
+            pass
+        except Exception as e:
+            self.add_log(f"❌ Ошибка загрузки настроек Telegram: {e}")
+    
+    def init_telegram_notifier(self, token: str, chat_id: str):
+        """Инициализация Telegram уведомлений"""
+        try:
+            from telegram_notifier import TelegramNotifier
+            self.telegram_notifier = TelegramNotifier(token, chat_id)
+            
+            # Обновляем ссылку на telegram_notifier в торговом движке
+            if self.trading_engine:
+                self.trading_engine.telegram_notifier = self.telegram_notifier
+                # Настройка callback функций
+                if hasattr(self.telegram_notifier, 'set_callback'):
+                    self.telegram_notifier.set_callback('get_balance', self.trading_engine.get_balance_for_telegram)
+                    self.telegram_notifier.set_callback('stop_trading', self.trading_engine.stop_trading_for_telegram)
+            
+            # Запускаем polling для обработки callback'ов
+            if hasattr(self.telegram_notifier, 'start_polling'):
+                self.telegram_notifier.start_polling()
+                self.add_log("✅ Telegram уведомления инициализированы и polling запущен")
+            else:
+                self.add_log("✅ Telegram уведомления инициализированы")
+        except Exception as e:
+            self.add_log(f"❌ Ошибка инициализации Telegram уведомлений: {e}")
+            self.telegram_notifier = None
     
     def auto_start_trading(self):
         """Автоматический запуск торговли при старте программы"""
