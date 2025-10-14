@@ -1098,8 +1098,9 @@ class TradingWorker(QThread):
                 if self.balance_limit_active and self.balance_limit_amount > 0:
                     available_balance = min(available_balance, self.balance_limit_amount)
             
-            # Размер позиции зависит от уверенности (1-3% от баланса)
-            position_percentage = 0.01 + (confidence - 0.65) * 0.02  # 1-3%
+            # Размер позиции зависит от уверенности (используем MAX_POSITION_PERCENT из конфига)
+            from config import MAX_POSITION_PERCENT
+            position_percentage = MAX_POSITION_PERCENT * (confidence / 0.65)  # Масштабируем по уверенности
             position_size = available_balance * position_percentage
             
             # Проверка минимального размера (Bybit требует минимум 5 USDT для спот торговли)

@@ -50,6 +50,7 @@ except ImportError as e:
 try:
     from api.bybit_client import BybitClient
     from config import get_api_credentials
+    import config
 except ImportError as e:
     print(f"❌ Ошибка импорта API: {e}")
     sys.exit(1)
@@ -188,9 +189,10 @@ class DataCollector(QThread):
 class SignalGenerator:
     """Генератор торговых сигналов"""
     
-    def __init__(self, logger):
+    def __init__(self, logger, banned_symbols=None):
         self.logger = logger
         self.min_confidence = 0.1  # Минимальная уверенность для сигнала (снижено до 0.1 для максимальной активности)
+        self.banned_symbols = banned_symbols or []
         
     def generate_signals(self, data: Dict, portfolio: Dict) -> List[TradingSignal]:
         """Генерация торговых сигналов на основе данных"""
@@ -248,7 +250,9 @@ class SignalGenerator:
             for ticker in ticker_data:
                 if isinstance(ticker, dict) and 'symbol' in ticker:
                     symbol = ticker['symbol']
-                    if symbol.endswith('USDT') and symbol != 'USDT':
+                    if (symbol.endswith('USDT') and 
+                        symbol != 'USDT' and 
+                        symbol not in self.banned_symbols):
                         pairs.append(symbol)
                         # Проверяем активность символа (есть ли изменение цены)
                         price_change = float(ticker.get('price24hPcnt', 0))
@@ -260,7 +264,9 @@ class SignalGenerator:
             # Получаем все USDT пары из тикеров
             tickers = ticker_data.get('tickers', ticker_data)
             for symbol, ticker_info in tickers.items():
-                if symbol.endswith('USDT') and symbol != 'USDT':
+                if (symbol.endswith('USDT') and 
+                    symbol != 'USDT' and 
+                    symbol not in self.banned_symbols):
                     pairs.append(symbol)
                     # Проверяем активность символа
                     price_change = float(ticker_info.get('price24hPcnt', 0))
@@ -275,6 +281,9 @@ class SignalGenerator:
             'MATICUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'FILUSDT'
         ]
         
+        # Фильтруем популярные символы от запрещенных
+        popular_pairs = [pair for pair in popular_pairs if pair not in self.banned_symbols]
+        
         # Используем активные символы, если есть, иначе популярные
         if active_pairs:
             # Добавляем популярные символы к активным для полноты анализа
@@ -287,6 +296,7 @@ class SignalGenerator:
         final_pairs = [pair for pair in final_pairs if pair not in invalid_symbols]
         
         self.logger.info(f"🎯 Найдено {len(active_pairs)} активных и {len(final_pairs)} общих USDT пар для анализа")
+        self.logger.info(f"🚫 Исключено {len(self.banned_symbols)} запрещенных символов: {self.banned_symbols}")
         return final_pairs
     
     def analyze_symbol(self, symbol: str, ticker_data, ml_data: Dict, portfolio: Dict) -> Optional[TradingSignal]:
@@ -394,7 +404,17 @@ class TradingEngine(QThread):
         self.signals_queue = []
         self.portfolio = {}
         self.logger = logging.getLogger(__name__)
-        self.signal_generator = SignalGenerator(self.logger)
+        
+        # Централизованный список проблемных символов для исключения из торговли
+        self.banned_symbols = [
+            'BBSOLUSDT',      # Проблемы с минимальными суммами и округлением
+            'BABYDOGEUSDT',   # Ошибки API периода и превышение лимитов
+            'BBDUSDT',        # Ошибки API периода
+            'USDT',           # Не является торговой парой
+            'USDTUSDT'        # Не является торговой парой
+        ]
+        
+        self.signal_generator = SignalGenerator(self.logger, self.banned_symbols)
         self.mutex = QMutex()
         self.last_buy_times = {}  # Словарь для отслеживания времени последних покупок
         self.buy_cooldown = 60  # Уменьшаем кулдаун с 5 минут до 1 минуты для более активной торговли
@@ -402,7 +422,7 @@ class TradingEngine(QThread):
         
         # Новые параметры для контроля риска
         self.max_open_positions = 10  # Максимальное количество одновременно открытых позиций
-        self.risk_per_trade = 0.005  # 0.5% от баланса на одну сделку (вместо 1%)
+        self.risk_per_trade = config.MAX_POSITION_PERCENT  # Используем значение из конфига (3%)
         
         # Используем переданный telegram_notifier или создаем новый
         self.telegram_notifier = telegram_notifier
@@ -420,7 +440,7 @@ class TradingEngine(QThread):
         self.log_message.emit("🚀 Запуск автоматической торговли...")
         
         # Инициализируем генератор сигналов
-        signal_generator = SignalGenerator(self.logger)
+        signal_generator = SignalGenerator(self.logger, self.banned_symbols)
         
         while self.running:
             try:
@@ -640,11 +660,18 @@ class TradingEngine(QThread):
             current_time = time.time()
             usdt_balance = self.portfolio.get('USDT', 0)
             
+            # Детальное логирование начального состояния
+            self.log_message.emit(f"🔍 Обработка {len(signals)} сигналов. USDT баланс: ${usdt_balance:.2f}")
+            
             # Проверяем количество открытых позиций
             open_positions = len([coin for coin, amount in self.portfolio.items() 
                                 if coin != 'USDT' and amount > 0])
             
+            self.log_message.emit(f"📊 Открытых позиций: {open_positions}/{self.max_open_positions}")
+            
             for signal in signals:
+                self.log_message.emit(f"🔍 Обрабатываем сигнал {signal.symbol} ({signal.signal}), цена: ${signal.price:.6f}, уверенность: {signal.confidence:.2f}")
+                
                 # Проверяем кулдаун только для сигналов на покупку
                 if signal.signal == 'BUY' and signal.symbol in self.last_buy_times:
                     time_since_last_buy = current_time - self.last_buy_times[signal.symbol]
@@ -665,18 +692,34 @@ class TradingEngine(QThread):
                         instrument_info = self.get_instrument_info(signal.symbol)
                         min_trade_amount = max(float(instrument_info['minOrderAmt']), 5.0)  # API минимум $5
                         
+                        # Детальное логирование параметров инструмента
+                        self.log_message.emit(f"📋 {signal.symbol} - minOrderAmt: ${instrument_info['minOrderAmt']}, minOrderQty: {instrument_info['minOrderQty']}, qtyStep: {instrument_info['qtyStep']}")
+                        
+                        # Добавляем проверку максимальной аллокации на одну монету (50% баланса)
+                        max_allocation_per_coin = usdt_balance * 0.5
+                        
+                        self.log_message.emit(f"💰 {signal.symbol} - минимальная сумма: ${min_trade_amount:.2f}, макс. аллокация: ${max_allocation_per_coin:.2f}")
+                        
+                        # Проверяем, что у нас достаточно баланса для минимальной торговли
                         if usdt_balance < min_trade_amount:
                             self.log_message.emit(f"⚠️ Недостаточно USDT для {signal.symbol}: ${usdt_balance:.2f} < ${min_trade_amount:.2f} (сигнал отклонен)")
                             continue
+                        
+                        # Проверяем, что минимальная сумма не превышает 50% баланса
+                        if min_trade_amount > max_allocation_per_coin:
+                            self.log_message.emit(f"⚠️ Минимальная сумма для {signal.symbol} (${min_trade_amount:.2f}) превышает 50% баланса (${max_allocation_per_coin:.2f}) (сигнал отклонен)")
+                            continue
+                            
                     except Exception as e:
                         self.log_message.emit(f"⚠️ Ошибка проверки инструмента {signal.symbol}: {e} (сигнал отклонен)")
                         continue
                 
+                self.log_message.emit(f"✅ Сигнал {signal.symbol} прошел все проверки и добавлен в очередь")
                 filtered_signals.append(signal)
             
             self.signals_queue.extend(filtered_signals)
             if filtered_signals:
-                self.log_message.emit(f"📊 Добавлено {len(filtered_signals)} сигналов в очередь")
+                self.log_message.emit(f"📊 Добавлено {len(filtered_signals)} сигналов в очередь (всего в очереди: {len(self.signals_queue)})")
                 self.save_signals_queue()  # Сохраняем изменения в файл
             if len(filtered_signals) < len(signals):
                 rejected_count = len(signals) - len(filtered_signals)
@@ -960,9 +1003,20 @@ class TradingEngine(QThread):
     def execute_buy_order(self, signal: TradingSignal):
         """Выполнение ордера на покупку"""
         try:
+            # Детальное логирование начального состояния
+            self.log_message.emit(f"🔍 Начинаем покупку {signal.symbol}. Цена: ${signal.price:.6f}, Уверенность: {signal.confidence:.2f}")
+            
+            # Фильтрация проблемных символов через централизованный список
+            if signal.symbol in self.banned_symbols:
+                self.log_message.emit(f"⚠️ Символ {signal.symbol} в списке исключений, пропускаем торговлю")
+                return False
+            
             # Проверяем количество открытых позиций
             open_positions = len([coin for coin, amount in self.portfolio.items() 
                                 if coin != 'USDT' and amount > 0])
+            
+            self.log_message.emit(f"📊 Открытых позиций: {open_positions}/{self.max_open_positions}")
+            
             if open_positions >= self.max_open_positions:
                 self.log_message.emit(f"⚠️ Достигнуто максимальное количество открытых позиций ({self.max_open_positions}). Пропускаем покупку {signal.symbol}")
                 return False
@@ -971,25 +1025,48 @@ class TradingEngine(QThread):
             current_time = time.time()
             if signal.symbol in self.last_buy_times:
                 time_since_last_buy = current_time - self.last_buy_times[signal.symbol]
+                self.log_message.emit(f"⏰ {signal.symbol}: Время с последней покупки: {time_since_last_buy:.0f} сек (кулдаун: {self.buy_cooldown} сек)")
+                
                 if time_since_last_buy < self.buy_cooldown:
                     remaining_time = self.buy_cooldown - time_since_last_buy
                     self.log_message.emit(f"⏳ Кулдаун для {signal.symbol}: осталось {remaining_time:.0f} сек")
                     return False
+            else:
+                self.log_message.emit(f"⏰ {signal.symbol}: Первая покупка для этого символа")
             
             # Проверяем баланс USDT
             usdt_balance = self.portfolio.get('USDT', 0)
+            self.log_message.emit(f"💰 Баланс USDT: ${usdt_balance:.2f}")
             
             # Получаем актуальную информацию об инструменте через API
             instrument_info = self.get_instrument_info(signal.symbol)
             min_trade_amount = float(instrument_info['minOrderAmt'])
+            min_order_qty = instrument_info['minOrderQty']
+            qty_step = instrument_info['qtyStep']
+            
+            # Детальное логирование параметров инструмента
+            self.log_message.emit(f"📋 {signal.symbol} - minOrderAmt: ${min_trade_amount:.2f}, minOrderQty: {min_order_qty}, qtyStep: {qty_step}")
             
             # ВАЖНО: Bybit API требует минимум $5 для API торговли (с января 2025)
             # Но для BTCUSDT minOrderAmt уже равен 5 USDT согласно API ответу
             api_min_order_value = 5.0  # $5 минимум для API торговли
             
-            # Добавляем буфер к минимальной сумме для избежания ошибок округления
-            # Проблема: $5.28 отклоняется при минимуме $5.00 из-за округления
-            buffer_multiplier = 1.02  # 2% буфер для избежания ошибок округления (было 10% - слишком много)
+            # Список проблемных символов, требующих больших буферов
+            problematic_symbols = ['BBSOLUSDT', 'BABYDOGEUSDT']
+            
+            # Рассчитываем динамический буфер в зависимости от qtyStep и символа
+            if signal.symbol in problematic_symbols:
+                buffer_multiplier = 1.50  # 50% буфер для проблемных символов
+                self.log_message.emit(f"🔍 {signal.symbol}: Применяется увеличенный буфер 50% для проблемного символа")
+            elif qty_step < 1e-6:  # Очень маленький шаг количества
+                buffer_multiplier = 1.25  # 25% буфер для монет с очень малым qtyStep
+                self.log_message.emit(f"🔍 {signal.symbol}: qtyStep={qty_step} < 1e-6, применяется буфер 25%")
+            elif qty_step < 1e-4:  # Маленький шаг количества
+                buffer_multiplier = 1.15  # 15% буфер для монет с малым qtyStep
+                self.log_message.emit(f"🔍 {signal.symbol}: qtyStep={qty_step} < 1e-4, применяется буфер 15%")
+            else:
+                buffer_multiplier = 1.05  # 5% буфер для обычных монет
+                self.log_message.emit(f"🔍 {signal.symbol}: Стандартный буфер 5%")
             
             # Устанавливаем эффективную минимальную сумму на основе реальных данных API
             if signal.symbol == 'BTCUSDT':
@@ -997,36 +1074,52 @@ class TradingEngine(QThread):
                 base_min_amount = max(min_trade_amount, api_min_order_value)
                 effective_min_amount = base_min_amount * buffer_multiplier
                 max_trade_amount = max(effective_min_amount * 20, 100.0)  # До $100 для BTCUSDT
+                self.log_message.emit(f"💎 BTCUSDT: base_min=${base_min_amount:.2f}, effective_min=${effective_min_amount:.2f}, max=${max_trade_amount:.2f}")
             elif signal.symbol == 'BBSOLUSDT':
                 # Специальная обработка для BBSOLUSDT - используем только API минимум
                 self.log_message.emit(f"🔍 BBSOLUSDT: minOrderAmt={min_trade_amount}, API_min={api_min_order_value}")
                 base_min_amount = max(min_trade_amount, api_min_order_value)  # Убираем принудительный минимум $10
-                effective_min_amount = base_min_amount * 1.02  # Минимальный буфер 2%
+                effective_min_amount = base_min_amount * buffer_multiplier  # Используем динамический буфер
                 max_trade_amount = max(effective_min_amount * 4, 20.0)  # Максимум $20
-                self.log_message.emit(f"🔍 BBSOLUSDT: base_min=${base_min_amount:.2f}, effective_min=${effective_min_amount:.2f}, max=${max_trade_amount:.2f}")
+                self.log_message.emit(f"🔍 BBSOLUSDT: base_min=${base_min_amount:.2f}, effective_min=${effective_min_amount:.2f}, max=${max_trade_amount:.2f}, buffer={buffer_multiplier:.2f}")
             elif signal.symbol in ['ETHUSDT', 'BNBUSDT', 'LINKUSDT']:
                 # Для других дорогих активов используем более высокий минимум с буфером
                 base_min_amount = max(min_trade_amount, api_min_order_value, 20.0)  # Уменьшено с $50 до $20
                 effective_min_amount = base_min_amount * buffer_multiplier
                 max_trade_amount = max(effective_min_amount * 4, 80.0)  # Уменьшено с $200 до $80
+                self.log_message.emit(f"💎 {signal.symbol}: base_min=${base_min_amount:.2f}, effective_min=${effective_min_amount:.2f}, max=${max_trade_amount:.2f}")
             else:
                 # Для всех остальных символов используем API минимум $5 с буфером
                 base_min_amount = max(min_trade_amount, api_min_order_value)
                 effective_min_amount = base_min_amount * buffer_multiplier
                 max_trade_amount = max(effective_min_amount * 10, 20.0)  # Уменьшено с $50 до $20 для надежности
+                self.log_message.emit(f"💰 {signal.symbol}: base_min=${base_min_amount:.2f}, effective_min=${effective_min_amount:.2f}, max=${max_trade_amount:.2f}")
             
             if usdt_balance < effective_min_amount:
-                self.log_message.emit(f"⚠️ Недостаточно USDT для покупки {signal.symbol}: ${usdt_balance:.2f} (минимум ${effective_min_amount})")
+                self.log_message.emit(f"⚠️ Недостаточно USDT для покупки {signal.symbol}: ${usdt_balance:.2f} (минимум ${effective_min_amount:.2f})")
                 return False
             
             # Ограничиваем максимальную аллокацию на одну монету до 50% от баланса
             max_allocation_per_coin = usdt_balance * 0.5  # 50% от баланса
+            self.log_message.emit(f"📊 Максимальная аллокация на монету: ${max_allocation_per_coin:.2f} (50% от баланса)")
             
-            # Рассчитываем сумму для покупки (0.5% от USDT вместо 1%, но не менее минимума и не более максимума)
+            # Рассчитываем сумму для покупки (используем MAX_POSITION_PERCENT из конфига, но не менее минимума и не более максимума)
             # Добавляем ограничение по максимальной аллокации на одну монету
-            trade_amount = max(min(usdt_balance * self.risk_per_trade, max_trade_amount, max_allocation_per_coin), effective_min_amount)
+            base_trade_amount = usdt_balance * self.risk_per_trade
+            trade_amount = max(min(base_trade_amount, max_trade_amount, max_allocation_per_coin), effective_min_amount)
+            
+            self.log_message.emit(f"💵 Расчет суммы торговли: базовая=${base_trade_amount:.2f} (баланс×{self.risk_per_trade:.3f})")
+            
+            # Дополнительная проверка: если trade_amount превышает половину баланса, ограничиваем его
+            if trade_amount > max_allocation_per_coin:
+                trade_amount = max_allocation_per_coin
+                self.log_message.emit(f"⚠️ {signal.symbol}: Сумма торговли ограничена 50% баланса: ${trade_amount:.2f}")
             
             # Логируем расчеты для диагностики
+            self.log_message.emit(f"🔍 {signal.symbol}: Расчет торговли - баланс=${usdt_balance:.2f}, риск={self.risk_per_trade:.3f}, "
+                                f"базовая_сумма=${base_trade_amount:.2f}, макс_на_монету=${max_allocation_per_coin:.2f}, "
+                                f"эффективный_мин=${effective_min_amount:.2f}, макс_торговля=${max_trade_amount:.2f}, "
+                                f"итоговая_сумма=${trade_amount:.2f}")
             self.log_message.emit(f"💰 Расчет для {signal.symbol}: баланс=${usdt_balance:.2f}, риск={self.risk_per_trade*100:.1f}%, макс_аллокация=${max_allocation_per_coin:.2f}, итого=${trade_amount:.2f}")
             
             # Рассчитываем количество для покупки
@@ -1262,6 +1355,9 @@ class TradingEngine(QThread):
             base_asset = signal.symbol.replace('USDT', '')
             asset_balance = self.portfolio.get(base_asset, 0)
             
+            # Детальное логирование начального состояния
+            self.log_message.emit(f"🔍 Начинаем продажу {signal.symbol}. Баланс {base_asset}: {asset_balance:.8f}")
+            
             if asset_balance <= 0:
                 self.log_message.emit(f"⚠️ Недостаточно {base_asset} для продажи: {asset_balance}")
                 return False
@@ -1270,9 +1366,15 @@ class TradingEngine(QThread):
             instrument_info = self.get_instrument_info(signal.symbol)
             min_order_qty = instrument_info['minOrderQty']
             qty_step = instrument_info['qtyStep']
+            min_order_amt = instrument_info['minOrderAmt']
+            
+            # Детальное логирование параметров инструмента
+            self.log_message.emit(f"📋 {signal.symbol} - minOrderQty: {min_order_qty}, qtyStep: {qty_step}, minOrderAmt: ${min_order_amt}")
             
             # Продаем 50% от имеющегося количества
             sell_amount = asset_balance * 0.5
+            
+            self.log_message.emit(f"💰 Планируем продать 50% от {asset_balance:.8f} = {sell_amount:.8f} {base_asset}")
             
             # Правильно округляем количество согласно qtyStep
             if qty_step > 0:
@@ -1290,18 +1392,41 @@ class TradingEngine(QThread):
                 else:
                     precision_decimals = 0
                 
+                self.log_message.emit(f"🔢 Округление: qtyStep={qty_step}, precision_decimals={precision_decimals}")
+                
                 # Округляем с правильной точностью
+                original_sell_amount = sell_amount
                 sell_amount = math.floor(sell_amount / qty_step) * qty_step
                 sell_amount = round(sell_amount, precision_decimals)
+                
+                self.log_message.emit(f"🔢 Округлено с {original_sell_amount:.8f} до {sell_amount:.8f}")
             
             # Проверяем, что количество не меньше минимального
             if sell_amount < min_order_qty:
-                self.log_message.emit(f"⚠️ Количество для продажи {sell_amount:.8f} меньше минимального {min_order_qty:.8f}")
-                return False
+                self.log_message.emit(f"⚠️ Количество для продажи 50% ({sell_amount:.8f}) меньше минимального {min_order_qty:.8f}")
+                # Пробуем продать полный объем
+                sell_amount = asset_balance
+                
+                self.log_message.emit(f"🔄 Пробуем продать полный объем: {sell_amount:.8f}")
+                
+                # Правильно округляем полный объем согласно qtyStep
+                if qty_step > 0:
+                    original_full_amount = sell_amount
+                    sell_amount = math.floor(sell_amount / qty_step) * qty_step
+                    sell_amount = round(sell_amount, precision_decimals)
+                    
+                    self.log_message.emit(f"🔢 Полный объем округлен с {original_full_amount:.8f} до {sell_amount:.8f}")
+                
+                if sell_amount >= min_order_qty:
+                    self.log_message.emit(f"✅ Продаем полный объем: {sell_amount:.8f} {base_asset}")
+                else:
+                    self.log_message.emit(f"❌ Даже полный объем {sell_amount:.8f} меньше минимального {min_order_qty:.8f}")
+                    return False
             
             # Проверяем минимальную стоимость ордера
             estimated_usdt = sell_amount * signal.price
-            min_order_amt = instrument_info['minOrderAmt']
+            
+            self.log_message.emit(f"💵 Расчетная стоимость продажи: {sell_amount:.8f} × ${signal.price:.6f} = ${estimated_usdt:.2f}")
             
             if estimated_usdt < min_order_amt:
                 self.log_message.emit(f"⚠️ Стоимость продажи ${estimated_usdt:.2f} меньше минимальной ${min_order_amt:.2f}")
@@ -1384,9 +1509,11 @@ class TradingEngine(QThread):
                 # Получаем текущие цены для расчета стоимости
                 ticker_data = self.load_ticker_data()
                 total_value_usdt = 0
+                has_assets = False
                 
                 for coin, amount in self.portfolio.items():
                     if amount > 0:
+                        has_assets = True
                         if coin == 'USDT':
                             balance_text += f"• {coin}: {amount:.2f} USDT\n"
                             total_value_usdt += amount
@@ -1402,23 +1529,31 @@ class TradingEngine(QThread):
                             
                             balance_text += f"• {coin}: {amount:.6f} (${value_usdt:.2f})\n"
                 
-                balance_text += f"\n💵 <b>Общая стоимость: ${total_value_usdt:.2f} USDT</b>"
-                return balance_text
+                if has_assets:
+                    balance_text += f"\n💵 <b>Общая стоимость: ${total_value_usdt:.2f} USDT</b>"
+                    return balance_text
+                else:
+                    return "💰 <b>Портфолио пусто</b>\n\nНет активных позиций"
             else:
-                return "❌ Данные о балансе недоступны"
+                return "❌ <b>Данные о балансе недоступны</b>\n\nПопробуйте позже"
         except Exception as e:
+            error_msg = f"❌ <b>Ошибка получения баланса</b>\n\n{str(e)}"
             self.log_message.emit(f"❌ Ошибка получения баланса для Telegram: {e}")
-            return f"❌ Ошибка получения баланса: {e}"
+            return error_msg
     
     def stop_trading_for_telegram(self):
         """Остановка торговли через Telegram"""
         try:
-            self.trading_enabled = False
-            self.log_message.emit("🛑 Торговля остановлена через Telegram")
-            return "🛑 Торговля успешно остановлена"
+            if hasattr(self, 'trading_enabled'):
+                self.trading_enabled = False
+                self.log_message.emit("🛑 Торговля остановлена через Telegram")
+                return "🛑 <b>Торговля остановлена</b>\n\nВсе новые сигналы будут игнорироваться"
+            else:
+                return "⚠️ <b>Торговля уже неактивна</b>\n\nСистема не торгует"
         except Exception as e:
+            error_msg = f"❌ <b>Ошибка остановки торговли</b>\n\n{str(e)}"
             self.log_message.emit(f"❌ Ошибка остановки торговли через Telegram: {e}")
-            return f"❌ Ошибка остановки торговли: {e}"
+            return error_msg
 
 
 class TraderMainWindow(QMainWindow):
@@ -1842,7 +1977,8 @@ class TraderMainWindow(QMainWindow):
         
         if self.trading_active and self.trading_engine:
             # Генерируем сигналы
-            signal_generator = SignalGenerator(self.logger)
+            banned_symbols = getattr(self.trading_engine, 'banned_symbols', [])
+            signal_generator = SignalGenerator(self.logger, banned_symbols)
             portfolio = getattr(self.trading_engine, 'portfolio', {})
             signals = signal_generator.generate_signals(data, portfolio)
             
