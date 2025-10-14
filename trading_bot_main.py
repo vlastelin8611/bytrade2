@@ -70,7 +70,7 @@ if GUI_AVAILABLE:
         QProgressBar, QStatusBar, QTabWidget, QScrollArea, QFrame, 
         QGridLayout, QSpacerItem, QSizePolicy, QLineEdit, QComboBox, QSlider
     )
-    from PySide6.QtCore import QTimer, QThread, Signal, QMutex, QMetaObject, Q_ARG, QSettings
+    from PySide6.QtCore import QTimer, QThread, Signal, QMutex, QMetaObject, Q_ARG
     from PySide6.QtGui import QTextCursor, QFont, QPalette, QColor, QPixmap, QIcon
 
 # Импортируем модуль для записи логов терминала
@@ -79,21 +79,6 @@ try:
 except ImportError:
     def setup_terminal_logging():
         pass
-
-try:
-    from src.utils.performance_monitor import get_performance_monitor, start_performance_monitoring, stop_performance_monitoring, measure_performance
-except ImportError:
-    # Заглушки если модуль не найден
-    def get_performance_monitor():
-        return None
-    def start_performance_monitoring():
-        pass
-    def stop_performance_monitoring():
-        pass
-    def measure_performance(operation_name=None):
-        def decorator(func):
-            return func
-        return decorator
 
 # Импорт наших модулей
 try:
@@ -133,7 +118,7 @@ class TradingWorker(QThread):
         self.api_secret = api_secret
         self.testnet = testnet
         self.running = False
-        self.trading_enabled = True  # ✅ ИСПРАВЛЕНО: торговля включена по умолчанию для автоматической работы
+        self.trading_enabled = False  # ✅ ИСПРАВЛЕНО: торговля отключена по умолчанию, включается только через интерфейс
         self._mutex = QMutex()
         
         # Инициализация компонентов
@@ -141,10 +126,6 @@ class TradingWorker(QThread):
         self.ml_strategy = None
         self.db_manager = None
         self.config_manager = None
-        self.performance_monitor = get_performance_monitor()
-        
-        # Запуск мониторинга производительности
-        start_performance_monitoring()
         
         # Инициализация атрибутов для работы с балансом и историей сделок
         self.trade_history = []
@@ -400,7 +381,6 @@ class TradingWorker(QThread):
             #     'session_id': getattr(self, 'current_session_id', None)
             # }) # Временно закомментировано - блокирует выполнение
     
-    @measure_performance("update_balance")
     def _update_balance(self, session_id: str) -> Optional[dict]:
         """Обновление информации о балансе"""
         try:
@@ -468,7 +448,6 @@ class TradingWorker(QThread):
             self.logger.error(f"Ошибка обновления баланса: {e}")
             return None
     
-    @measure_performance("update_positions")
     def _update_positions(self, session_id: str) -> List[dict]:
         """Обновление информации о позициях (для спотовой торговли - открытые ордера)"""
         try:
@@ -568,14 +547,9 @@ class TradingWorker(QThread):
                 self.logger.warning("Не найдено символов для анализа. Проверьте подключение к программе просмотра тикеров.")
                 return
             
-            # ОПТИМИЗАЦИЯ: Увеличиваем количество символов для анализа и добавляем интеллектуальный отбор
-            max_symbols = 100  # ОПТИМИЗИРОВАНО: Увеличено до 100 символов за цикл для максимального охвата рынка (~600 тикеров)
-            
-            # Интеллектуальный отбор символов на основе объема и волатильности
-            if len(symbols_to_analyze) > max_symbols:
-                symbols_to_analyze = self._select_best_symbols(symbols_to_analyze, max_symbols)
-            
-            self.logger.info(f"Отобрано {len(symbols_to_analyze)} символов для анализа из доступных")
+            # Ограничиваем количество символов для анализа чтобы избежать перегрузки
+            max_symbols = 10  # Анализируем максимум 10 символов за цикл
+            symbols_to_analyze = symbols_to_analyze[:max_symbols]
             
             # Обрабатываем символы асинхронно
             self._process_symbols_async(symbols_to_analyze, session_id, cycle_start)
@@ -589,16 +563,6 @@ class TradingWorker(QThread):
         if not symbols:
             cycle_time = (time.time() - cycle_start) * 1000
             self.logger.info(f"Торговый цикл завершен за {cycle_time:.2f} мс")
-            
-            # Периодическое логирование производительности каждые 10 циклов
-            self.cycle_count = getattr(self, 'cycle_count', 0) + 1
-            if self.cycle_count % 10 == 0:
-                try:
-                    performance_summary = self.performance_monitor.get_performance_summary()
-                    self.logger.info(f"Отчет о производительности (цикл {self.cycle_count}): {performance_summary}")
-                except Exception as e:
-                    self.logger.warning(f"Не удалось получить отчет о производительности: {e}")
-            
             return
         
         # Берем первый символ из списка
@@ -784,48 +748,6 @@ class TradingWorker(QThread):
         self.logger.info(f"Будет анализироваться {len(final_symbols)} торговых символов")
         return final_symbols  # Возвращаем все доступные символы без ограничений
     
-    def _select_best_symbols(self, symbols: List[str], max_count: int) -> List[str]:
-        """Интеллектуальный отбор лучших символов на основе объема и активности"""
-        try:
-            # Получаем данные о тикерах для оценки активности
-            if hasattr(self, 'ticker_loader') and self.ticker_loader:
-                ticker_data = self.ticker_loader.get_all_tickers()
-                if ticker_data:
-                    # Создаем список символов с метриками
-                    symbol_metrics = []
-                    for symbol in symbols:
-                        if symbol in ticker_data:
-                            data = ticker_data[symbol]
-                            # Вычисляем метрику активности (объем * изменение цены)
-                            volume = float(data.get('volume', 0))
-                            price_change = abs(float(data.get('price_change_percent', 0)))
-                            activity_score = volume * (1 + price_change / 100)
-                            
-                            symbol_metrics.append({
-                                'symbol': symbol,
-                                'volume': volume,
-                                'price_change': price_change,
-                                'activity_score': activity_score
-                            })
-                    
-                    # Сортируем по активности (убывание)
-                    symbol_metrics.sort(key=lambda x: x['activity_score'], reverse=True)
-                    
-                    # Возвращаем топ символов
-                    selected_symbols = [item['symbol'] for item in symbol_metrics[:max_count]]
-                    
-                    self.logger.info(f"Отобрано {len(selected_symbols)} наиболее активных символов")
-                    return selected_symbols
-            
-            # Если данные о тикерах недоступны, возвращаем первые символы
-            self.logger.warning("Данные о тикерах недоступны, используем простой отбор")
-            return symbols[:max_count]
-            
-        except Exception as e:
-            self.logger.error(f"Ошибка при отборе символов: {e}")
-            return symbols[:max_count]
-    
-    @measure_performance("analyze_symbol")
     def _analyze_symbol(self, symbol: str, session_id: str) -> Optional[dict]:
         """Анализ конкретного символа (асинхронно)"""
         try:
@@ -925,11 +847,8 @@ class TradingWorker(QThread):
             return None
     
     def _check_daily_limits(self, analysis: dict) -> bool:
-        """Проверка дневных лимитов торговли - ОТКЛЮЧЕНА ДЛЯ ТЕСТИРОВАНИЯ"""
+        """Проверка дневных лимитов торговли"""
         try:
-            # ВРЕМЕННО ОТКЛЮЧАЕМ ВСЕ ЛИМИТЫ ДЛЯ ТЕСТИРОВАНИЯ ТОРГОВЛИ
-            return True
-            
             # Получение текущего баланса
             balance_response = self.bybit_client.get_wallet_balance()
             if not balance_response or not balance_response.get('list'):
@@ -961,7 +880,6 @@ class TradingWorker(QThread):
             self.logger.error(f"Ошибка проверки лимитов: {e}")
             return False
     
-    @measure_performance("execute_trade")
     def _execute_trade(self, symbol: str, analysis: dict, session_id: str) -> Optional[dict]:
         """Выполнение торговой операции"""
         try:
@@ -975,14 +893,14 @@ class TradingWorker(QThread):
                 self.logger.info(f"Торговля отключена. Сигнал {signal} для {symbol} игнорируется.")
                 return None
 
-            # НОВАЯ ЛОГИКА: Для SELL ордеров используем USDT для покупки базовой валюты, затем продаем
+            # НОВАЯ ЛОГИКА: Проверка баланса базовой валюты для SELL ордеров
             if signal == 'SELL':
                 # Извлекаем базовую валюту из символа (например, из 1INCHUSDT получаем 1INCH)
                 base_currency = symbol.replace('USDT', '') if symbol.endswith('USDT') else symbol.replace('USD', '')
                 
-                # Получаем баланс USDT для покупки
+                # Получаем баланс базовой валюты
                 balance_resp = self.bybit_client.get_wallet_balance()
-                usdt_balance = 0.0
+                base_currency_balance = 0.0
                 
                 if balance_resp:
                     # Проверяем оба формата ответа
@@ -993,86 +911,19 @@ class TradingWorker(QThread):
                     else:
                         coins = []
                     
-                    # Ищем баланс USDT
+                    # Ищем баланс базовой валюты
                     for coin in coins:
-                        if coin.get('coin') == 'USDT':
-                            usdt_balance = float(coin.get('walletBalance', 0))
+                        if coin.get('coin') == base_currency:
+                            base_currency_balance = float(coin.get('walletBalance', 0))
                             break
                 
-                # Проверяем достаточность USDT для покупки и последующей продажи
-                min_trade_amount = 10.0  # Минимум $10 для торговли
-                if usdt_balance < min_trade_amount:
-                    self.logger.warning(f"Недостаточно USDT для торговли {symbol}: {usdt_balance} (нужно минимум {min_trade_amount})")
+                # Проверяем достаточность баланса для продажи
+                min_sell_amount = 0.001  # Минимальное количество для продажи
+                if base_currency_balance < min_sell_amount:
+                    self.logger.warning(f"Недостаточно {base_currency} для продажи: {base_currency_balance}")
                     return None
                 
-                self.logger.info(f"USDT баланс: {usdt_balance} - достаточно для торговли {symbol}")
-                
-                # ВЫПОЛНЯЕМ ТОРГОВЛЮ ЧЕРЕЗ USDT (покупаем базовую валюту за USDT, затем продаем)
-                trade_amount_usdt = min(usdt_balance * 0.1, 50.0)  # Используем 10% от USDT баланса, но не более $50
-                
-                self.logger.info(f"🔥 ВЫПОЛНЯЕМ ТОРГОВЛЮ {symbol}: покупаем за {trade_amount_usdt} USDT, затем продаем")
-                
-                # Здесь должна быть логика реального выполнения ордера через API
-                # Пока что логируем успешную торговлю
-                trade_result = {
-                    'symbol': symbol,
-                    'side': 'SELL',
-                    'amount': trade_amount_usdt,
-                    'price': 'market',
-                    'status': 'filled',
-                    'timestamp': time.time()
-                }
-                
-                self.logger.info(f"✅ ТОРГОВЛЯ ВЫПОЛНЕНА: {trade_result}")
-                return trade_result
-            
-            # НОВАЯ ЛОГИКА: Для BUY ордеров тоже используем USDT
-            if signal == 'BUY':
-                # Получаем баланс USDT для покупки
-                balance_resp = self.bybit_client.get_wallet_balance()
-                usdt_balance = 0.0
-                
-                if balance_resp:
-                    # Проверяем оба формата ответа
-                    if 'result' in balance_resp and balance_resp['result'].get('list'):
-                        coins = balance_resp['result']['list'][0].get('coin', [])
-                    elif 'list' in balance_resp and balance_resp['list']:
-                        coins = balance_resp['list'][0].get('coin', [])
-                    else:
-                        coins = []
-                    
-                    # Ищем баланс USDT
-                    for coin in coins:
-                        if coin.get('coin') == 'USDT':
-                            usdt_balance = float(coin.get('walletBalance', 0))
-                            break
-                
-                # Проверяем достаточность USDT для покупки
-                min_trade_amount = 10.0  # Минимум $10 для торговли
-                if usdt_balance < min_trade_amount:
-                    self.logger.warning(f"Недостаточно USDT для покупки {symbol}: {usdt_balance} (нужно минимум {min_trade_amount})")
-                    return None
-                
-                self.logger.info(f"USDT баланс: {usdt_balance} - достаточно для покупки {symbol}")
-                
-                # ВЫПОЛНЯЕМ ПОКУПКУ
-                trade_amount_usdt = min(usdt_balance * 0.1, 50.0)  # Используем 10% от USDT баланса, но не более $50
-                
-                self.logger.info(f"🔥 ВЫПОЛНЯЕМ ПОКУПКУ {symbol}: покупаем за {trade_amount_usdt} USDT")
-                
-                # Здесь должна быть логика реального выполнения ордера через API
-                # Пока что логируем успешную торговлю
-                trade_result = {
-                    'symbol': symbol,
-                    'side': 'BUY',
-                    'amount': trade_amount_usdt,
-                    'price': 'market',
-                    'status': 'filled',
-                    'timestamp': time.time()
-                }
-                
-                self.logger.info(f"✅ ПОКУПКА ВЫПОЛНЕНА: {trade_result}")
-                return trade_result
+                self.logger.info(f"Баланс {base_currency}: {base_currency_balance} - достаточно для продажи")
             
             # Расчет размера позиции
             balance_resp = self.bybit_client.get_wallet_balance()
@@ -1098,14 +949,13 @@ class TradingWorker(QThread):
                 if self.balance_limit_active and self.balance_limit_amount > 0:
                     available_balance = min(available_balance, self.balance_limit_amount)
             
-            # Размер позиции зависит от уверенности (используем MAX_POSITION_PERCENT из конфига)
-            from config import MAX_POSITION_PERCENT
-            position_percentage = MAX_POSITION_PERCENT * (confidence / 0.65)  # Масштабируем по уверенности
+            # Размер позиции зависит от уверенности (1-3% от баланса)
+            position_percentage = 0.01 + (confidence - 0.65) * 0.02  # 1-3%
             position_size = available_balance * position_percentage
             
-            # Проверка минимального размера (Bybit требует минимум 5 USDT для спот торговли)
-            if position_size < 5:
-                self.logger.info(f"Размер позиции слишком мал: ${position_size:.2f} < $5.00")
+            # Проверка минимального размера
+            if position_size < 10:
+                self.logger.info(f"Размер позиции слишком мал: ${position_size:.2f} < $10.00")
                 return None
             
             # Размещение ордера
@@ -1218,16 +1068,6 @@ class TradingWorker(QThread):
             # НЕ отключаем торговлю автоматически - пользователь должен управлять этим сам
             # self.trading_enabled = False  # УБРАНО: не отключаем торговлю при остановке потока
             self.logger.info("Остановка торгового потока запрошена")
-            
-            # Остановка мониторинга производительности
-            stop_performance_monitoring()
-            
-            # Вывод финального отчета о производительности
-            if self.performance_monitor:
-                summary = self.performance_monitor.get_performance_summary()
-                self.logger.info("=== ОТЧЕТ О ПРОИЗВОДИТЕЛЬНОСТИ ===")
-                for key, value in summary.items():
-                    self.logger.info(f"{key}: {value}")
             
             # Отправляем сигнал об остановке только если торговля была отключена
             if not self.trading_enabled:
@@ -3082,7 +2922,7 @@ class TradingBotMainWindow(QMainWindow):
         
         # Автопрокрутка к последнему сообщению
         cursor = self.logs_text.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.movePosition(QTextCursor.End)
         self.logs_text.setTextCursor(cursor)
     
     def handle_error(self, error_message: str):
@@ -3115,18 +2955,6 @@ class TradingBotMainWindow(QMainWindow):
                 "QLabel { color: #27ae60; font-weight: bold; font-size: 14px; }"
             )
             self.trading_toggle_btn.setEnabled(True)
-            
-            # АВТОМАТИЧЕСКИ ОБНОВЛЯЕМ КНОПКУ ПРИ ПОДКЛЮЧЕНИИ
-            if self.trading_worker and self.trading_worker.trading_enabled:
-                self.trading_toggle_btn.setText("⏸️ Остановить торговлю")
-                self.trading_toggle_btn.setStyleSheet(
-                    "QPushButton { background-color: #e74c3c; color: white; font-weight: bold; padding: 10px; }"
-                )
-            else:
-                self.trading_toggle_btn.setText("▶️ Включить торговлю")
-                self.trading_toggle_btn.setStyleSheet(
-                    "QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 10px; }"
-                )
             
             # Обновляем bybit_client в PortfolioTab при успешном подключении
             if hasattr(self, 'trading_worker') and self.trading_worker and hasattr(self.trading_worker, 'bybit_client') and self.trading_worker.bybit_client:

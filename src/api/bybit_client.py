@@ -113,16 +113,8 @@ class BybitClient:
             pass
         return int(time.time() * 1000)
     
-    def _make_request(self, method: str, endpoint: str, params: Dict = None, body: Dict = None, return_full_response: bool = False) -> Dict:
-        """Выполнение HTTP запроса к API
-        
-        Args:
-            method: HTTP метод (GET, POST)
-            endpoint: API endpoint
-            params: Параметры запроса
-            body: Тело запроса для POST
-            return_full_response: Если True, возвращает полный ответ с retCode, иначе только result
-        """
+    def _make_request(self, method: str, endpoint: str, params: Dict = None, body: Dict = None) -> Dict:
+        """Выполнение HTTP запроса к API"""
         self.rate_limiter.wait_if_needed()
         
         url = f"{self.base_url}{endpoint}"
@@ -158,43 +150,18 @@ class BybitClient:
         }
         
         try:
-            # Retry логика для сетевых ошибок
-            max_retries = 3
-            retry_delay = 1  # секунды
+            if method.upper() == 'GET':
+                response = self.session.get(url, params=params, headers=headers, timeout=10)
+            elif method.upper() == 'POST':
+                request_body = body if body is not None else params
+                response = self.session.post(url, data=body_str if body_str else None, json=request_body if not body_str else None, headers=headers, timeout=10)
+            else:
+                raise ValueError(f"Неподдерживаемый HTTP метод: {method}")
             
-            for attempt in range(max_retries):
-                try:
-                    if method.upper() == 'GET':
-                        response = self.session.get(url, params=params, headers=headers, timeout=15)  # Увеличен таймаут
-                    elif method.upper() == 'POST':
-                        request_body = body if body is not None else params
-                        response = self.session.post(url, data=body_str if body_str else None, json=request_body if not body_str else None, headers=headers, timeout=15)  # Увеличен таймаут
-                    else:
-                        raise ValueError(f"Неподдерживаемый HTTP метод: {method}")
-                    
-                    response.raise_for_status()
-                    break  # Успешный запрос, выходим из цикла retry
-                    
-                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.HTTPError) as e:
-                    if attempt < max_retries - 1:  # Не последняя попытка
-                        self.logger.warning(f"Сетевая ошибка (попытка {attempt + 1}/{max_retries}): {e}. Повтор через {retry_delay} сек...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # Экспоненциальная задержка
-                        continue
-                    else:
-                        raise  # Последняя попытка, пробрасываем ошибку
-            
+            response.raise_for_status()
             data = response.json()
             
-            # Логирование для отладки
-            if endpoint == '/v5/order/create':
-                self.logger.info(f"API ответ для создания ордера: retCode={data.get('retCode')}, retMsg={data.get('retMsg')}")
-            
-            # Если запрошен полный ответ, возвращаем его без проверки retCode
-            if return_full_response:
-                return data
-            
-            # Проверка ответа API только для обычных запросов
+            # Проверка ответа API
             if data.get('retCode') != 0:
                 error_msg = data.get('retMsg', 'Неизвестная ошибка API')
                 self.logger.error(f"API ошибка: {error_msg}")
@@ -343,7 +310,7 @@ class BybitClient:
             self.logger.error(traceback.format_exc())
             return []
     
-    def get_tickers(self, category: str = "spot", symbol: str = None) -> List[Dict]:
+    def get_tickers(self, category: str = "linear", symbol: str = None) -> List[Dict]:
         """Получение тикеров"""
         cache_key = f"tickers_{category}_{symbol or 'all'}"
         cached_data = self._get_cached_data(cache_key)
@@ -370,26 +337,17 @@ class BybitClient:
         """
         out = {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
         try:
-            # Логируем полный ответ для отладки
-            self.logger.info(f"Получен ответ баланса: {resp}")
-            
             # Проверяем, что получили корректный ответ
-            if not resp:
-                self.logger.warning("Получен пустой ответ при запросе баланса")
+            if not resp or 'result' not in resp:
+                self.logger.warning("Получен пустой или некорректный ответ при запросе баланса")
                 return out
-            
-            # API Bybit может возвращать данные в разных форматах
-            # Проверяем сначала новый формат с 'list' напрямую
-            if 'list' in resp and resp['list']:
-                acc = resp['list'][0]
-                self.logger.info("Используем формат ответа с 'list' напрямую")
-            # Затем проверяем старый формат с 'result'
-            elif 'result' in resp and 'list' in resp['result'] and resp['result']['list']:
-                acc = resp['result']['list'][0]
-                self.logger.info("Используем формат ответа с 'result.list'")
-            else:
-                self.logger.warning(f"Нет данных о балансе в ответе API. Ключи ответа: {list(resp.keys())}")
+                
+            # Проверяем, что есть список аккаунтов
+            if 'list' not in resp['result'] or not resp['result']['list']:
+                self.logger.warning(f"Нет данных о балансе в ответе API")
                 return out
+                
+            acc = resp['result']['list'][0]
             out['total_wallet_usd'] = Decimal(str(acc.get('totalWalletBalance', '0')))
             out['total_available_usd'] = Decimal(str(acc.get('totalAvailableBalance', '0')))
             
@@ -615,11 +573,7 @@ class BybitClient:
     
     def place_order(self, category: str, symbol: str, side: str, order_type: str, 
                    qty: str, price: str = None, **kwargs) -> Dict:
-        """Размещение ордера
-        
-        Returns:
-            Dict: Полный ответ API с retCode для корректной проверки успешности
-        """
+        """Размещение ордера"""
         params = {
             'category': category,
             'symbol': symbol,
@@ -634,8 +588,7 @@ class BybitClient:
         # Дополнительные параметры
         params.update(kwargs)
         
-        # Возвращаем полный ответ с retCode для корректной проверки
-        result = self._make_request('POST', '/v5/order/create', params, return_full_response=True)
+        result = self._make_request('POST', '/v5/order/create', params)
         return result
     
     def cancel_order(self, category: str, symbol: str, order_id: str = None, 
