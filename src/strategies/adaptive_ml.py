@@ -314,16 +314,19 @@ class AdaptiveMLStrategy:
             features = []
             labels = []
             
+            # Получаем горизонт прогнозирования из конфигурации
+            prediction_horizon = self.config.get('prediction_horizon', 1)
+            
             # Извлекаем признаки и создаем метки
-            for i in range(self.feature_window, len(klines) - 1):
+            for i in range(self.feature_window, len(klines) - prediction_horizon):
                 window = klines[i - self.feature_window : i]
                 feat = self.extract_features(window)
                 if feat:
                     features.append(feat)
                     
-                    # Создаем метку на основе изменения цены
+                    # Создаем метку на основе изменения цены через prediction_horizon свечей
                     current_price = float(klines[i]['close'])
-                    future_price = float(klines[i + 1]['close'])
+                    future_price = float(klines[i + prediction_horizon]['close'])
                     change = (future_price - current_price) / current_price
                     
                     # Метки: 1 (BUY), -1 (SELL), 0 (HOLD)
@@ -341,7 +344,7 @@ class AdaptiveMLStrategy:
                 
             # Обучаем модель
             self.train_model(symbol, features, labels)
-            self.logger.info(f"✅ Модель обучена для {symbol} на {len(features)} примерах")
+            self.logger.info(f"✅ Модель обучена для {symbol} на {len(features)} примерах с горизонтом {prediction_horizon} свечей")
             return True
             
         except Exception as e:
@@ -944,3 +947,322 @@ class AdaptiveMLStrategy:
             'symbols': list(self.models.keys()),
             'individual_performance': self.model_performance
         }
+    
+    def analyze_position_profitability(self, symbol: str, entry_price: float, current_price: float, 
+                                     position_type: str, holding_time_hours: float, 
+                                     market_data: Dict) -> Dict[str, Any]:
+        """
+        Анализ прибыльности позиции с использованием ML
+        
+        Args:
+            symbol: Торговая пара
+            entry_price: Цена входа
+            current_price: Текущая цена
+            position_type: Тип позиции ('buy' или 'sell')
+            holding_time_hours: Время удержания позиции в часах
+            market_data: Текущие рыночные данные
+            
+        Returns:
+            Dict с анализом прибыльности и рекомендациями
+        """
+        try:
+            # Расчет текущей прибыли/убытка
+            if position_type.lower() == 'buy':
+                profit_pct = ((current_price - entry_price) / entry_price) * 100
+            else:
+                profit_pct = ((entry_price - current_price) / entry_price) * 100
+            
+            # Получение технических индикаторов для анализа
+            klines = market_data.get('klines', [])
+            if not klines:
+                return {
+                    'should_exit': False,
+                    'confidence': 0.0,
+                    'reason': 'Недостаточно данных для анализа',
+                    'current_profit_pct': profit_pct,
+                    'predicted_profit_potential': 0.0
+                }
+            
+            # Извлечение признаков для ML анализа
+            features = self.extract_features(klines)
+            if not features:
+                return {
+                    'should_exit': False,
+                    'confidence': 0.0,
+                    'reason': 'Не удалось извлечь признаки',
+                    'current_profit_pct': profit_pct,
+                    'predicted_profit_potential': 0.0
+                }
+            
+            # Добавление дополнительных признаков для анализа позиции
+            position_features = features + [
+                profit_pct,  # Текущая прибыль
+                holding_time_hours,  # Время удержания
+                abs(current_price - entry_price) / entry_price,  # Волатильность позиции
+                1.0 if position_type.lower() == 'buy' else 0.0  # Тип позиции
+            ]
+            
+            # Анализ рыночного режима
+            prices = [float(k.get('close', 0)) for k in klines[-50:]]
+            regime_info = self.regime_detector.detect_regime(prices)
+            
+            # Предсказание оптимального действия
+            prediction_result = self.predict_exit_signal(symbol, position_features, regime_info, profit_pct)
+            
+            # Дополнительные проверки для короткосрочной торговли
+            exit_recommendation = self.evaluate_short_term_exit(
+                profit_pct, holding_time_hours, regime_info, prediction_result
+            )
+            
+            return {
+                'should_exit': exit_recommendation['should_exit'],
+                'confidence': exit_recommendation['confidence'],
+                'reason': exit_recommendation['reason'],
+                'current_profit_pct': profit_pct,
+                'predicted_profit_potential': prediction_result.get('profit_potential', 0.0),
+                'holding_time_hours': holding_time_hours,
+                'market_regime': regime_info.get('regime', 'unknown'),
+                'ml_prediction': prediction_result
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка анализа прибыльности позиции {symbol}: {e}")
+            return {
+                'should_exit': False,
+                'confidence': 0.0,
+                'reason': f'Ошибка анализа: {str(e)}',
+                'current_profit_pct': 0.0,
+                'predicted_profit_potential': 0.0
+            }
+    
+    def predict_exit_signal(self, symbol: str, features: List[float], regime_info: Dict, 
+                           current_profit: float) -> Dict[str, Any]:
+        """
+        Предсказание сигнала выхода из позиции с использованием ML
+        """
+        try:
+            if not SKLEARN_AVAILABLE or symbol not in self.models:
+                return self.simple_exit_logic(features, regime_info, current_profit)
+            
+            model = self.models[symbol]
+            scaler = self.scalers.get(symbol)
+            
+            if scaler:
+                features_scaled = scaler.transform([features])
+            else:
+                features_scaled = [features]
+            
+            # Предсказание вероятности выхода
+            exit_probabilities = model.predict_proba(features_scaled)[0]
+            
+            # Класс 0 - держать, класс 1 - продавать
+            hold_prob = exit_probabilities[0] if len(exit_probabilities) > 0 else 0.5
+            exit_prob = exit_probabilities[1] if len(exit_probabilities) > 1 else 0.5
+            
+            # Расчет потенциальной прибыли на основе исторических данных
+            profit_potential = self.calculate_profit_potential(symbol, features, regime_info)
+            
+            return {
+                'exit_probability': exit_prob,
+                'hold_probability': hold_prob,
+                'profit_potential': profit_potential,
+                'model_confidence': max(hold_prob, exit_prob)
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка предсказания выхода для {symbol}: {e}")
+            return self.simple_exit_logic(features, regime_info, current_profit)
+    
+    def simple_exit_logic(self, features: List[float], regime_info: Dict, current_profit: float) -> Dict[str, Any]:
+        """
+        Простая логика выхода без ML (fallback)
+        """
+        try:
+            # Базовые правила для короткосрочной торговли
+            regime = regime_info.get('regime', 'sideways')
+            volatility = regime_info.get('volatility', 0.5)
+            
+            # Быстрый выход при хорошей прибыли в волатильном рынке
+            if current_profit > 2.0 and volatility > 0.7:
+                return {
+                    'exit_probability': 0.8,
+                    'hold_probability': 0.2,
+                    'profit_potential': current_profit * 0.8,
+                    'model_confidence': 0.7
+                }
+            
+            # Выход при убытках в медвежьем рынке
+            if current_profit < -1.0 and regime == 'bearish':
+                return {
+                    'exit_probability': 0.7,
+                    'hold_probability': 0.3,
+                    'profit_potential': current_profit * 1.2,
+                    'model_confidence': 0.6
+                }
+            
+            # Держать позицию в бычьем рынке с небольшой прибылью
+            if regime == 'bullish' and current_profit > 0:
+                return {
+                    'exit_probability': 0.3,
+                    'hold_probability': 0.7,
+                    'profit_potential': current_profit * 1.5,
+                    'model_confidence': 0.6
+                }
+            
+            # По умолчанию - нейтральная позиция
+            return {
+                'exit_probability': 0.5,
+                'hold_probability': 0.5,
+                'profit_potential': current_profit,
+                'model_confidence': 0.4
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка простой логики выхода: {e}")
+            return {
+                'exit_probability': 0.5,
+                'hold_probability': 0.5,
+                'profit_potential': 0.0,
+                'model_confidence': 0.0
+            }
+    
+    def evaluate_short_term_exit(self, profit_pct: float, holding_time_hours: float, 
+                                regime_info: Dict, ml_prediction: Dict) -> Dict[str, Any]:
+        """
+        Оценка выхода для короткосрочной торговли с использованием конфигурации
+        """
+        try:
+            # Импортируем конфигурацию короткосрочной торговли
+            try:
+                import sys
+                import os
+                sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+                from config import SHORT_TERM_TRADING
+            except ImportError:
+                # Используем значения по умолчанию, если конфигурация недоступна
+                SHORT_TERM_TRADING = {
+                    'quick_profit_target': 0.02,
+                    'stop_loss_percent': 0.015,
+                    'min_profit_threshold': 0.005,
+                    'max_holding_hours': 24,
+                    'exit_confidence_threshold': 0.7
+                }
+            
+            exit_prob = ml_prediction.get('exit_probability', 0.5)
+            profit_potential = ml_prediction.get('profit_potential', 0.0)
+            
+            # Правила для короткосрочной торговли на основе конфигурации
+            reasons = []
+            should_exit = False
+            confidence = 0.0
+            
+            # 1. Быстрая прибыль - достижение цели
+            quick_target = SHORT_TERM_TRADING['quick_profit_target'] * 100
+            if profit_pct >= quick_target:
+                should_exit = True
+                confidence = 0.95
+                reasons.append(f"Достигнута цель быстрой прибыли {profit_pct:.2f}% (цель: {quick_target:.1f}%)")
+            
+            # 2. Стоп-лосс для ограничения убытков
+            elif profit_pct <= -SHORT_TERM_TRADING['stop_loss_percent'] * 100:
+                should_exit = True
+                confidence = 0.9
+                reasons.append(f"Сработал стоп-лосс при убытке {profit_pct:.2f}%")
+            
+            # 3. Минимальная прибыль с высокой уверенностью ML
+            elif (profit_pct >= SHORT_TERM_TRADING['min_profit_threshold'] * 100 and 
+                  exit_prob > SHORT_TERM_TRADING['exit_confidence_threshold']):
+                should_exit = True
+                confidence = exit_prob
+                reasons.append(f"Прибыль {profit_pct:.2f}% + ML рекомендует выход ({exit_prob:.2f})")
+            
+            # 4. Превышение максимального времени удержания
+            elif holding_time_hours > SHORT_TERM_TRADING['max_holding_hours']:
+                should_exit = True
+                confidence = 0.8
+                reasons.append(f"Превышено максимальное время удержания {holding_time_hours:.1f}ч")
+            
+            # 5. Быстрая прибыль за короткое время (скальпинг)
+            elif profit_pct >= 1.0 and holding_time_hours <= 2.0:
+                should_exit = True
+                confidence = 0.85
+                reasons.append(f"Скальпинг: {profit_pct:.2f}% за {holding_time_hours:.1f}ч")
+            
+            # 6. ML предсказывает снижение прибыли
+            elif exit_prob > 0.8 and profit_potential < profit_pct * 0.8:
+                should_exit = True
+                confidence = 0.7
+                reasons.append("ML предсказывает снижение прибыльности")
+            
+            # 7. Негативный тренд в медвежьем рынке
+            elif regime_info.get('regime') == 'bearish' and profit_pct < 0 and exit_prob > 0.6:
+                should_exit = True
+                confidence = 0.7
+                reasons.append("Медвежий рынок + убытки + ML рекомендует выход")
+            
+            # 8. Высокая волатильность - фиксируем прибыль
+            elif (regime_info.get('volatility', 0) > 0.05 and 
+                  profit_pct > SHORT_TERM_TRADING['min_profit_threshold'] * 100):
+                should_exit = True
+                confidence = 0.75
+                reasons.append(f"Высокая волатильность, фиксируем прибыль {profit_pct:.2f}%")
+            
+            return {
+                'should_exit': should_exit,
+                'confidence': confidence,
+                'reason': '; '.join(reasons) if reasons else f'Продолжить удержание (прибыль: {profit_pct:.2f}%, время: {holding_time_hours:.1f}ч)'
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка оценки короткосрочного выхода: {e}")
+            # В случае ошибки - консервативный подход
+            if profit_pct > 1.0:  # Если есть прибыль больше 1%
+                return {
+                    'should_exit': True,
+                    'confidence': 0.7,
+                    'reason': f'Консервативный выход при ошибке анализа (прибыль: {profit_pct:.2f}%)'
+                }
+            return {
+                'should_exit': False,
+                'confidence': 0.5,
+                'reason': f'Ошибка анализа: {str(e)}'
+            }
+    
+    def calculate_profit_potential(self, symbol: str, features: List[float], regime_info: Dict) -> float:
+        """
+        Расчет потенциальной прибыли на основе исторических данных и текущих условий
+        """
+        try:
+            # Базовый расчет на основе рыночного режима
+            regime = regime_info.get('regime', 'sideways')
+            volatility = regime_info.get('volatility', 0.5)
+            
+            # Потенциал прибыли в зависимости от режима рынка
+            if regime == 'bullish':
+                base_potential = 2.0 + (volatility * 1.5)
+            elif regime == 'bearish':
+                base_potential = 0.5 + (volatility * 0.5)
+            else:  # sideways
+                base_potential = 1.0 + (volatility * 1.0)
+            
+            # Корректировка на основе технических индикаторов
+            if len(features) >= 10:
+                # RSI корректировка
+                rsi_feature = features[7] if len(features) > 7 else 50
+                if rsi_feature > 70:  # Перекупленность
+                    base_potential *= 0.7
+                elif rsi_feature < 30:  # Перепроданность
+                    base_potential *= 1.3
+                
+                # MACD корректировка
+                macd_feature = features[8] if len(features) > 8 else 0
+                if macd_feature > 0:  # Бычий сигнал
+                    base_potential *= 1.2
+                else:  # Медвежий сигнал
+                    base_potential *= 0.8
+            
+            return min(base_potential, 5.0)  # Ограничение максимального потенциала
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка расчета потенциала прибыли: {e}")
+            return 1.0

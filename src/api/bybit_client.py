@@ -338,16 +338,16 @@ class BybitClient:
         out = {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
         try:
             # Проверяем, что получили корректный ответ
-            if not resp or 'result' not in resp:
+            if not resp or 'list' not in resp:
                 self.logger.warning("Получен пустой или некорректный ответ при запросе баланса")
                 return out
                 
             # Проверяем, что есть список аккаунтов
-            if 'list' not in resp['result'] or not resp['result']['list']:
+            if not resp['list']:
                 self.logger.warning(f"Нет данных о балансе в ответе API")
                 return out
                 
-            acc = resp['result']['list'][0]
+            acc = resp['list'][0]
             out['total_wallet_usd'] = Decimal(str(acc.get('totalWalletBalance', '0')))
             out['total_available_usd'] = Decimal(str(acc.get('totalAvailableBalance', '0')))
             

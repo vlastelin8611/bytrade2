@@ -84,7 +84,7 @@ except ImportError:
 try:
     from api.bybit_client import BybitClient
     from strategies.adaptive_ml import AdaptiveMLStrategy
-    from database.db_manager import DatabaseManager
+    from src.database.db_manager import DatabaseManager
     
     if GUI_AVAILABLE:
         from gui.portfolio_tab import PortfolioTab

@@ -1,0 +1,208 @@
+2025-10-14 19:28:48,459 - INFO - Логи сохраняются в файл: C:\Users\vlastelin8\Desktop\trade\crypto\logs\portfolio_viewer_20251014_192848.log
+2025-10-14 19:28:48,461 - INFO - ✅ Рабочий поток инициализирован
+2025-10-14 19:28:53,647 - INFO - 🚀 Автообновление запущено
+2025-10-14 19:28:53,648 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:28:53,659 - INFO - Инициализация API клиента...
+2025-10-14 19:28:53,660 - INFO - ✅ API клиент инициализирован (testnet: True)
+2025-10-14 19:28:53,661 - INFO - 🔄 Получение UNIFIED баланса...
+2025-10-14 19:29:08,728 - ERROR - Ошибка HTTP запроса: HTTPSConnectionPool(host='api-testnet.bybit.com', port=443): Read timed out. (read timeout=10)
+2025-10-14 19:29:08,729 - ERROR - Ошибка получения баланса: Ошибка соединения с API: HTTPSConnectionPool(host='api-testnet.bybit.com', port=443): Read timed out. (read timeout=10)
+2025-10-14 19:29:08,749 - ERROR - Traceback (most recent call last):
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\connectionpool.py", line 464, in _make_request
+    self._validate_conn(conn)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\connectionpool.py", line 1093, in _validate_conn
+    conn.connect()
+    ~~~~~~~~~~~~^^
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\connection.py", line 741, in connect
+    sock_and_verified = _ssl_wrap_socket_and_match_hostname(
+        sock=sock,
+    ...<14 lines>...
+        assert_fingerprint=self.assert_fingerprint,
+    )
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\connection.py", line 920, in _ssl_wrap_socket_and_match_hostname
+    ssl_sock = ssl_wrap_socket(
+        sock=sock,
+    ...<8 lines>...
+        tls_in_tls=tls_in_tls,
+    )
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\util\ssl_.py", line 460, in ssl_wrap_socket
+    ssl_sock = _ssl_wrap_socket_impl(sock, context, tls_in_tls, server_hostname)
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\util\ssl_.py", line 504, in _ssl_wrap_socket_impl
+    return ssl_context.wrap_socket(sock, server_hostname=server_hostname)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\ssl.py", line 455, in wrap_socket
+    return self.sslsocket_class._create(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        sock=sock,
+        ^^^^^^^^^^
+    ...<5 lines>...
+        session=session
+        ^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\ssl.py", line 1076, in _create
+    self.do_handshake()
+    ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\ssl.py", line 1372, in do_handshake
+    self._sslobj.do_handshake()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+TimeoutError: _ssl.c:1001: The handshake operation timed out
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\requests\adapters.py", line 667, in send
+    resp = conn.urlopen(
+        method=request.method,
+    ...<9 lines>...
+        chunked=chunked,
+    )
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\connectionpool.py", line 841, in urlopen
+    retries = retries.increment(
+        method, url, error=new_e, _pool=self, _stacktrace=sys.exc_info()[2]
+    )
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\util\retry.py", line 474, in increment
+    raise reraise(type(error), error, _stacktrace)
+          ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\util\util.py", line 39, in reraise
+    raise value
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+        conn,
+    ...<10 lines>...
+        **response_kw,
+    )
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\connectionpool.py", line 488, in _make_request
+    raise new_e
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\connectionpool.py", line 466, in _make_request
+    self._raise_timeout(err=e, url=url, timeout_value=conn.timeout)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\urllib3\connectionpool.py", line 367, in _raise_timeout
+    raise ReadTimeoutError(
+        self, url, f"Read timed out. (read timeout={timeout_value})"
+    ) from err
+urllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool(host='api-testnet.bybit.com', port=443): Read timed out. (read timeout=10)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\vlastelin8\Desktop\trade\crypto\src\api\bybit_client.py", line 154, in _make_request
+    response = self.session.get(url, params=params, headers=headers, timeout=10)
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\requests\sessions.py", line 602, in get
+    return self.request("GET", url, **kwargs)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\requests\sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\requests\sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+  File "C:\Users\vlastelin8\AppData\Local\Programs\Python\Python313\Lib\site-packages\requests\adapters.py", line 713, in send
+    raise ReadTimeout(e, request=request)
+requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='api-testnet.bybit.com', port=443): Read timed out. (read timeout=10)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\vlastelin8\Desktop\trade\crypto\src\api\bybit_client.py", line 395, in get_unified_balance_flat
+    raw = self._make_request('GET', '/v5/account/wallet-balance', params)
+  File "C:\Users\vlastelin8\Desktop\trade\crypto\src\api\bybit_client.py", line 174, in _make_request
+    raise Exception(f"Ошибка соединения с API: {e}")
+Exception: Ошибка соединения с API: HTTPSConnectionPool(host='api-testnet.bybit.com', port=443): Read timed out. (read timeout=10)
+
+2025-10-14 19:29:08,754 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:29:08,755 - INFO - ✅ UNIFIED баланс обновлен
+2025-10-14 19:29:08,755 - INFO - 🔄 Получение FUND баланса...
+2025-10-14 19:29:23,806 - ERROR - Ошибка HTTP запроса: HTTPSConnectionPool(host='api-testnet.bybit.com', port=443): Read timed out. (read timeout=10)
+2025-10-14 19:29:23,807 - ERROR - Ошибка получения баланса: Ошибка соединения с API: HTTPSConnectionPool(host='api-testnet.bybit.com', port=443): Read timed out. (read timeout=10)
+2025-10-14 19:29:23,808 - INFO - ❌ Ошибка получения баланса: Ошибка соединения с API: HTTPSConnectionPool(host='api-testnet.bybit.com', port=443): Read timed out. (read timeout=10)
+2025-10-14 19:29:43,142 - INFO - 🔄 Ручное обновление данных...
+2025-10-14 19:29:43,142 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:29:44,047 - WARNING - Получен пустой или некорректный ответ при запросе баланса
+2025-10-14 19:29:44,047 - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+2025-10-14 19:29:44,048 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:29:44,609 - INFO - ✅ FUND баланс обновлен: 0 монет
+2025-10-14 19:29:44,609 - INFO - ✅ Ручное обновление завершено
+2025-10-14 19:29:49,996 - INFO - 🔄 Ручное обновление данных...
+2025-10-14 19:29:50,002 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:29:50,808 - WARNING - Получен пустой или некорректный ответ при запросе баланса
+2025-10-14 19:29:50,808 - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+2025-10-14 19:29:50,808 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:29:51,359 - INFO - ✅ FUND баланс обновлен: 0 монет
+2025-10-14 19:29:51,359 - INFO - ✅ Ручное обновление завершено
+2025-10-14 19:29:53,817 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:29:53,817 - INFO - 🔄 Получение UNIFIED баланса...
+2025-10-14 19:29:54,553 - WARNING - Получен пустой или некорректный ответ при запросе баланса
+2025-10-14 19:29:54,553 - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+2025-10-14 19:29:54,554 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:29:54,554 - INFO - ✅ UNIFIED баланс обновлен
+2025-10-14 19:29:54,554 - INFO - 🔄 Получение FUND баланса...
+2025-10-14 19:29:55,101 - INFO - ✅ FUND баланс обновлен: 0 монет
+2025-10-14 19:29:55,101 - INFO - ✅ FUND баланс обновлен
+2025-10-14 19:30:25,103 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:30:25,103 - INFO - 🔄 Получение UNIFIED баланса...
+2025-10-14 19:30:25,650 - WARNING - Получен пустой или некорректный ответ при запросе баланса
+2025-10-14 19:30:25,651 - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+2025-10-14 19:30:25,651 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:30:25,652 - INFO - ✅ UNIFIED баланс обновлен
+2025-10-14 19:30:25,652 - INFO - 🔄 Получение FUND баланса...
+2025-10-14 19:30:26,200 - INFO - ✅ FUND баланс обновлен: 0 монет
+2025-10-14 19:30:26,201 - INFO - ✅ FUND баланс обновлен
+2025-10-14 19:30:50,819 - INFO - 🔄 Ручное обновление данных...
+2025-10-14 19:30:50,819 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:30:52,103 - WARNING - Получен пустой или некорректный ответ при запросе баланса
+2025-10-14 19:30:52,103 - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+2025-10-14 19:30:52,104 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:30:52,660 - INFO - ✅ FUND баланс обновлен: 0 монет
+2025-10-14 19:30:52,661 - INFO - ✅ Ручное обновление завершено
+2025-10-14 19:30:56,205 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:30:56,205 - INFO - 🔄 Получение UNIFIED баланса...
+2025-10-14 19:30:56,749 - WARNING - Получен пустой или некорректный ответ при запросе баланса
+2025-10-14 19:30:56,749 - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+2025-10-14 19:30:56,750 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:30:56,750 - INFO - ✅ UNIFIED баланс обновлен
+2025-10-14 19:30:56,751 - INFO - 🔄 Получение FUND баланса...
+2025-10-14 19:30:57,309 - INFO - ✅ FUND баланс обновлен: 0 монет
+2025-10-14 19:30:57,310 - INFO - ✅ FUND баланс обновлен
+2025-10-14 19:31:11,326 - INFO - 🔄 Ручное обновление данных...
+2025-10-14 19:31:11,327 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:31:12,058 - WARNING - Получен пустой или некорректный ответ при запросе баланса
+2025-10-14 19:31:12,058 - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+2025-10-14 19:31:12,059 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:31:12,609 - INFO - ✅ FUND баланс обновлен: 0 монет
+2025-10-14 19:31:12,609 - INFO - ✅ Ручное обновление завершено
+2025-10-14 19:31:27,316 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:31:27,317 - INFO - 🔄 Получение UNIFIED баланса...
+2025-10-14 19:31:27,861 - WARNING - Получен пустой или некорректный ответ при запросе баланса
+2025-10-14 19:31:27,862 - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+2025-10-14 19:31:27,862 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:31:27,862 - INFO - ✅ UNIFIED баланс обновлен
+2025-10-14 19:31:27,863 - INFO - 🔄 Получение FUND баланса...
+2025-10-14 19:31:28,414 - INFO - ✅ FUND баланс обновлен: 0 монет
+2025-10-14 19:31:28,414 - INFO - ✅ FUND баланс обновлен
+2025-10-14 19:31:58,416 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:31:58,417 - INFO - 🔄 Получение UNIFIED баланса...
+2025-10-14 19:31:58,964 - WARNING - Получен пустой или некорректный ответ при запросе баланса
+2025-10-14 19:31:58,964 - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+2025-10-14 19:31:58,965 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:31:58,966 - INFO - ✅ UNIFIED баланс обновлен
+2025-10-14 19:31:58,966 - INFO - 🔄 Получение FUND баланса...
+2025-10-14 19:31:59,513 - INFO - ✅ FUND баланс обновлен: 0 монет
+2025-10-14 19:31:59,513 - INFO - ✅ FUND баланс обновлен
+2025-10-14 19:32:29,523 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:32:29,524 - INFO - 🔄 Получение UNIFIED баланса...
+2025-10-14 19:32:30,093 - WARNING - Получен пустой или некорректный ответ при запросе баланса
+2025-10-14 19:32:30,093 - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+2025-10-14 19:32:30,095 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:32:30,096 - INFO - ✅ UNIFIED баланс обновлен
+2025-10-14 19:32:30,097 - INFO - 🔄 Получение FUND баланса...
+2025-10-14 19:32:30,657 - INFO - ✅ FUND баланс обновлен: 0 монет
+2025-10-14 19:32:30,657 - INFO - ✅ FUND баланс обновлен
+2025-10-14 19:33:00,663 - INFO - Запрос баланса UNIFIED кошелька
+2025-10-14 19:33:00,664 - INFO - 🔄 Получение UNIFIED баланса...
+2025-10-14 19:33:01,208 - WARNING - Получен пустой или некорректный ответ при запросе баланса
+2025-10-14 19:33:01,208 - INFO - Получен баланс: {'total_wallet_usd': Decimal('0'), 'total_available_usd': Decimal('0'), 'coins': {}}
+2025-10-14 19:33:01,208 - INFO - ✅ UNIFIED баланс обновлен: 0 монет, $0.00
+2025-10-14 19:33:01,209 - INFO - ✅ UNIFIED баланс обновлен
+2025-10-14 19:33:01,210 - INFO - 🔄 Получение FUND баланса...
+2025-10-14 19:33:01,773 - INFO - ✅ FUND баланс обновлен: 0 монет
+2025-10-14 19:33:01,773 - INFO - ✅ FUND баланс обновлен
